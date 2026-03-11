@@ -2,3 +2,4 @@ pyTelegramBotAPI
 pandas
 numpy
 lifelines
+sklearn
