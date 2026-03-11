@@ -2,4 +2,4 @@ pyTelegramBotAPI
 pandas
 numpy
 lifelines
-sklearn
+scikit-learn
