@@ -1,26 +1,3 @@
-import pandas as pd
-import numpy as np
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score
-
-data = {
-    'Weight_kg': [85, 92, 70, 105, 88, 76, 95, 68, 110, 82],
-    'Height_cm': [175, 180, 165, 185, 178, 170, 182, 160, 190, 174],
-    'Waist_cm':  [95, 102, 80, 115, 98, 85, 105, 78, 120, 92],
-    'Age':       [45, 52, 38, 60, 48, 35, 55, 30, 62, 42],
-    # Імітаційні дані м’язової маси (кг)
-    # Логіка: нижча талія + молодший вік → вища м’язова маса
-    'Muscle_mass': [32.5, 30.0, 29.0, 31.0, 31.5, 30.5, 30.0, 28.5, 30.5, 31.0],
-    'Heartburn_Start': [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], # У всіх була печія
-    'Heartburn_Gone':  [1, 0, 1, 0, 1, 1, 0, 1, 0, 1]  # Результат: 1 - зникла, 0 - залишилась
-}
-
-df = pd.DataFrame(data)
-
-X = df[['Weight_kg', 'Height_cm', 'Waist_cm', 'Age']]
-y = df['Heartburn_Gone']
-
 import os
 import numpy as np
 import pandas as pd
@@ -30,7 +7,7 @@ from sklearn.linear_model import LogisticRegression
 import telebot
 from telebot import types
 
-###функції для ампутації
+#функції для ампутації
 def prepare_amputation_dataset_v2(
     df: pd.DataFrame,
     side_available: str = "R",
@@ -155,7 +132,7 @@ def build_new_person_features_v2(new_person: dict, feat_cols: list):
 
     return new_df[feat_cols]
 
-###симптоми
+#симптоми
 def Gastrointestinal_Tract_Symptoms(Whole_grain_products, Age, Height, Body_Weight, Body_Weight_Re_Examination, Heartburn):
     try:
         df = pd.read_csv("Rehabilitation_imputed_whole_grain.csv")
@@ -169,7 +146,7 @@ def Gastrointestinal_Tract_Symptoms(Whole_grain_products, Age, Height, Body_Weig
     bmi_delta = bmi_new - bmi_old
 
     features = ["Whole_grain_products", "Age", "BMI_Delta"]
-### створення датафрейму для прогнозу
+# створення датафрейму для прогнозу
     new_person = pd.DataFrame([{
         "Whole_grain_products": Whole_grain_products,
         "Age": Age,
@@ -182,14 +159,14 @@ def Gastrointestinal_Tract_Symptoms(Whole_grain_products, Age, Height, Body_Weig
         'Bloating_Re_Examination': 'Здуття',
         'Insomnia_Re_Examination': 'Безсоння'
     }
-    ### 2) Ensure numeric (handle comma decimals if needed)
+    # 2) Ensure numeric (handle comma decimals if needed)
     cols_to_clean = ["Whole_grain_products", "Age", "Height", "Body_Weight", "Body_Weight_Re_Examination", "Heartburn"] + list(targets.keys())
     for col in cols_to_clean:
         if col in df.columns:
             if df[col].dtype == object:
                 df[col] = df[col].astype(str).str.replace(",", ".", regex=False)
             df[col] = pd.to_numeric(df[col], errors="coerce")
-    ### 3) Create BMI_Delta
+    # 3) Create BMI_Delta
     df["Height_m"] = df["Height"] / 100
     df["BMI_Delta"] = (df["Body_Weight_Re_Examination"] / (df["Height_m"] ** 2)) - \
                       (df["Body_Weight"] / (df["Height_m"] ** 2))
@@ -204,10 +181,10 @@ def Gastrointestinal_Tract_Symptoms(Whole_grain_products, Age, Height, Body_Weig
 
             X = temp_df[features]
             y = temp_df["Symptom_gone"]
-            ### перевірка чи достатньо даних для навчання
+            # перевірка чи достатньо даних для навчання
             if len(y.unique()) < 2:
                 continue
-            ### 7) Train/test split
+            # 7) Train/test split
             X_train, X_test, y_train, y_test = train_test_split(
                 X, y,
                 test_size=0.25,
@@ -220,14 +197,14 @@ def Gastrointestinal_Tract_Symptoms(Whole_grain_products, Age, Height, Body_Weig
                 class_weight="balanced"
             )
             model_rf.fit(X_train, y_train)
-            ### 8.1) Train model 2: LogisticRegression
+            # 8.1) Train model 2: LogisticRegression
             model_lr = LogisticRegression(
                 max_iter=2000,
                 class_weight="balanced",
                 solver="lbfgs"
             )
             model_lr.fit(X_train, y_train)
-            ### ймовірність
+            # ймовірність
             probability_success = model_lr.predict_proba(new_person)[0][1]
 
             importances_rf = pd.Series(model_rf.feature_importances_, index=features)
@@ -235,7 +212,7 @@ def Gastrointestinal_Tract_Symptoms(Whole_grain_products, Age, Height, Body_Weig
 
             coef_lr = pd.Series(model_lr.coef_[0], index=features)
             coef_dict_lr = coef_lr.sort_values(ascending=False).round(4).to_dict()
-            ### зберігаємо результат
+            # зберігаємо результат
             results_dict[label] = {
                 "prob": probability_success,
                 "imp_rf": imp_dict_rf,
@@ -343,9 +320,8 @@ def Predict_Muscle_Mass_Secondary(Whole_grain_products, Age, Delta_Weight, Delta
     return model.predict(new_person)[0]
 
 bot = telebot.TeleBot('8464210577:AAHrEPRdNsgluESEIb1A9VdrYQnm_SFQXFo')
-###@RehabilitationInTheHospitalBot
+##@RehabilitationInTheHospitalBot
 patient_symptoms = {}
-
 
 @bot.callback_query_handler(func=lambda call: call.data in ["amp_arm_r", "amp_arm_l", "amp_leg_r", "amp_leg_l"])
 def handle_amputation_click(call):
@@ -444,6 +420,7 @@ def perform_amputation_prediction(chat_id):
 
     except Exception as e:
          bot.send_message(chat_id, f"Calculation error: {str(e)}")
+
 
 @bot.message_handler(commands=['start'])
 def start_message(message):
