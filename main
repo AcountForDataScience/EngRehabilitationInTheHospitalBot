@@ -1,12 +1,8 @@
-import os
-import numpy as np
 import pandas as pd
+import numpy as np
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
-from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score
-import telebot
-from telebot import types
 
 data = {
     'Weight_kg': [85, 92, 70, 105, 88, 76, 95, 68, 110, 82],
@@ -24,6 +20,15 @@ df = pd.DataFrame(data)
 
 X = df[['Weight_kg', 'Height_cm', 'Waist_cm', 'Age']]
 y = df['Heartburn_Gone']
+
+import os
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from sklearn.linear_model import LogisticRegression
+import telebot
+from telebot import types
 
 ###функції для ампутації
 def prepare_amputation_dataset_v2(
@@ -150,7 +155,7 @@ def build_new_person_features_v2(new_person: dict, feat_cols: list):
 
     return new_df[feat_cols]
 
-#симптоми
+###симптоми
 def Gastrointestinal_Tract_Symptoms(Whole_grain_products, Age, Height, Body_Weight, Body_Weight_Re_Examination, Heartburn):
     try:
         df = pd.read_csv("Rehabilitation_imputed_whole_grain.csv")
@@ -164,7 +169,7 @@ def Gastrointestinal_Tract_Symptoms(Whole_grain_products, Age, Height, Body_Weig
     bmi_delta = bmi_new - bmi_old
 
     features = ["Whole_grain_products", "Age", "BMI_Delta"]
-# створення датафрейму для прогнозу
+### створення датафрейму для прогнозу
     new_person = pd.DataFrame([{
         "Whole_grain_products": Whole_grain_products,
         "Age": Age,
@@ -177,14 +182,14 @@ def Gastrointestinal_Tract_Symptoms(Whole_grain_products, Age, Height, Body_Weig
         'Bloating_Re_Examination': 'Здуття',
         'Insomnia_Re_Examination': 'Безсоння'
     }
-    # 2) Ensure numeric (handle comma decimals if needed)
+    ### 2) Ensure numeric (handle comma decimals if needed)
     cols_to_clean = ["Whole_grain_products", "Age", "Height", "Body_Weight", "Body_Weight_Re_Examination", "Heartburn"] + list(targets.keys())
     for col in cols_to_clean:
         if col in df.columns:
             if df[col].dtype == object:
                 df[col] = df[col].astype(str).str.replace(",", ".", regex=False)
             df[col] = pd.to_numeric(df[col], errors="coerce")
-    # 3) Create BMI_Delta
+    ### 3) Create BMI_Delta
     df["Height_m"] = df["Height"] / 100
     df["BMI_Delta"] = (df["Body_Weight_Re_Examination"] / (df["Height_m"] ** 2)) - \
                       (df["Body_Weight"] / (df["Height_m"] ** 2))
@@ -199,10 +204,10 @@ def Gastrointestinal_Tract_Symptoms(Whole_grain_products, Age, Height, Body_Weig
 
             X = temp_df[features]
             y = temp_df["Symptom_gone"]
-            # перевірка чи достатньо даних для навчання
+            ### перевірка чи достатньо даних для навчання
             if len(y.unique()) < 2:
                 continue
-            # 7) Train/test split
+            ### 7) Train/test split
             X_train, X_test, y_train, y_test = train_test_split(
                 X, y,
                 test_size=0.25,
@@ -215,14 +220,14 @@ def Gastrointestinal_Tract_Symptoms(Whole_grain_products, Age, Height, Body_Weig
                 class_weight="balanced"
             )
             model_rf.fit(X_train, y_train)
-            # 8.1) Train model 2: LogisticRegression
+            ### 8.1) Train model 2: LogisticRegression
             model_lr = LogisticRegression(
                 max_iter=2000,
                 class_weight="balanced",
                 solver="lbfgs"
             )
             model_lr.fit(X_train, y_train)
-            # ймовірність
+            ### ймовірність
             probability_success = model_lr.predict_proba(new_person)[0][1]
 
             importances_rf = pd.Series(model_rf.feature_importances_, index=features)
@@ -230,7 +235,7 @@ def Gastrointestinal_Tract_Symptoms(Whole_grain_products, Age, Height, Body_Weig
 
             coef_lr = pd.Series(model_lr.coef_[0], index=features)
             coef_dict_lr = coef_lr.sort_values(ascending=False).round(4).to_dict()
-            # зберігаємо результат
+            ### зберігаємо результат
             results_dict[label] = {
                 "prob": probability_success,
                 "imp_rf": imp_dict_rf,
@@ -338,108 +343,8 @@ def Predict_Muscle_Mass_Secondary(Whole_grain_products, Age, Delta_Weight, Delta
     return model.predict(new_person)[0]
 
 bot = telebot.TeleBot('8464210577:AAHrEPRdNsgluESEIb1A9VdrYQnm_SFQXFo')
-##@RehabilitationInTheHospitalBot
+###@RehabilitationInTheHospitalBot
 patient_symptoms = {}
-
-
-
-@bot.callback_query_handler(func=lambda call: call.data in ["amp_arm_r", "amp_arm_l", "amp_leg_r", "amp_leg_l"])
-def handle_amputation_click(call):
-
-    chat_id = call.message.chat.id
-    bot.answer_callback_query(call.id)
-
-    patient_symptoms[chat_id]['amp_type'] = call.data
-
-    if not os.path.exists("Rehabilitation_imputed_whole_grain.csv"):
-        bot.send_message(
-            chat_id,
-            "❌ *ERROR:* Database file `Rehabilitation_imputed_whole_grain.csv` not found. Calculations are impossible. Please contact the developer or administrator.",
-            parse_mode="Markdown"
-        )
-        return
-
-    msg = bot.send_message(chat_id, "Enter the number of days after amputation:")
-    bot.register_next_step_handler(msg, get_amp_days)
-
-def get_amp_days(message):
-    try:
-        patient_symptoms[message.chat.id]['Days_after_amputation'] = float(message.text)
-        msg = bot.send_message(message.chat.id, "Enter the approximate mass of the lost limb (kg, if unknown enter 0):")
-        bot.register_next_step_handler(msg, get_amp_mass)
-    except ValueError:
-        bot.send_message(message.chat.id, "Please enter a number.")
-        bot.register_next_step_handler(message, get_amp_days)
-
-def get_amp_mass(message):
-    try:
-        val = float(message.text.replace(',', '.'))
-        if val == 0: val = np.nan # 0 як невідоме
-        patient_symptoms[message.chat.id]['Estimated_limb_mass_lost_kg'] = val
-        perform_amputation_prediction(message.chat.id)
-    except ValueError:
-        bot.send_message(message.chat.id, "Please enter a number.")
-        bot.register_next_step_handler(message, get_amp_mass)
-
-def perform_amputation_prediction(chat_id):
-    try:
-        data = patient_symptoms.get(chat_id)
-        if not data: return
-
-        amp_type = data['amp_type']
-
-        # налаштування змінних в залежності від типу ампутації
-        if amp_type == 'amp_arm_r':
-            side = "L"
-            level = "upper_limb"
-        elif amp_type == 'amp_arm_l':
-            side = "R"
-            level = "upper_limb"
-        elif amp_type == 'amp_leg_r':
-            side = "R"
-            level = "lower_limb"
-        else: # amp_leg_l
-            side = "R"
-            level = "lower_limb"
-
-        df = pd.read_csv("Rehabilitation_imputed_whole_grain.csv")
-        X, y, feat_cols = prepare_amputation_dataset_v2(
-            df, side_available=side, target_mode="fallback", use_weight_corrected=True
-        )
-
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42)
-        model = RandomForestRegressor(n_estimators=500, random_state=42)
-        model.fit(X_train, y_train)
-
-        # Формування даних пацієнта
-        delta_waist = data['Waist_Final'] - data['Waist_Start']
-        delta_skinfat = data['SkinFat_Final'] - data['SkinFat_Start']
-
-        new_person = {
-            "Whole_grain_products": data['Whole_grain_products'],
-            "Age": data['Age'],
-            "Delta_Skinfold": delta_skinfat,
-            "Delta_Waist": delta_waist,
-            "Days_after_amputation": data['Days_after_amputation'],
-            "Amputation_level": level,
-            "Estimated_limb_mass_lost_kg": data['Estimated_limb_mass_lost_kg'],
-            "Body_Weight": data['Body_Weight'],
-            "Body_Weight_Re_Examination": data['Body_Weight_Re_Examination']
-        }
-
-        new_X = build_new_person_features_v2(new_person, feat_cols)
-        pred = model.predict(new_X)[0]
-
-        result_text = f"✅ *Predicted muscle mass after amputation:* `{round(pred, 2)}`"
-
-        markup = types.InlineKeyboardMarkup()
-        btn_restart = types.InlineKeyboardButton("🔄 Start over", callback_data="restart", style="success")
-        markup.add(btn_restart)
-
-        bot.send_message(chat_id, result_text, parse_mode="Markdown", reply_markup=markup)
-
-    except Exception as e:
-         bot.send_message(chat_id, f"Calculation error: {str(e)}")
 
 
 @bot.callback_query_handler(func=lambda call: call.data in ["amp_arm_r", "amp_arm_l", "amp_leg_r", "amp_leg_l"])
