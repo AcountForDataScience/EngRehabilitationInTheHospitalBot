@@ -1,14 +1,23 @@
 import os
 import numpy as np
 import pandas as pd
-
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.linear_model import LogisticRegression
 import telebot
 from telebot import types
 
-#функції для ампутації
+AMPUTATION_PERCENTAGES = {
+    'male': {
+        'shoulder': 3.25, 'forearm': 1.87, 'hand': 0.65,
+        'thigh': 10.50, 'calf': 4.75, 'foot': 1.43
+    },
+    'female': {
+        'shoulder': 2.90, 'forearm': 1.57, 'hand': 0.50,
+        'thigh': 11.80, 'calf': 5.35, 'foot': 1.33
+    }
+}
+
 def prepare_amputation_dataset_v2(
     df: pd.DataFrame,
     side_available: str = "R",
@@ -76,7 +85,7 @@ def prepare_amputation_dataset_v2(
     elif target_mode == "fallback":
         df["Muscle_mass_proxy"] = df[["Delta_Grip", "Delta_Shoulder"]].sum(axis=1, min_count=1)
     else:
-        raise ValueError("target_mode має бути 'upper' або 'fallback'")
+        raise ValueError("target_mode must be 'upper' or 'fallback'")
 
     feat_cols = [
         "Whole_grain_products",
@@ -133,7 +142,6 @@ def build_new_person_features_v2(new_person: dict, feat_cols: list):
 
     return new_df[feat_cols]
 
-#симптоми
 def Gastrointestinal_Tract_Symptoms(Whole_grain_products, Age, Height, Body_Weight, Body_Weight_Re_Examination, Heartburn):
     try:
         df = pd.read_csv("Rehabilitation_imputed_whole_grain.csv")
@@ -147,7 +155,7 @@ def Gastrointestinal_Tract_Symptoms(Whole_grain_products, Age, Height, Body_Weig
     bmi_delta = bmi_new - bmi_old
 
     features = ["Whole_grain_products", "Age", "BMI_Delta"]
-# створення датафрейму для прогнозу
+
     new_person = pd.DataFrame([{
         "Whole_grain_products": Whole_grain_products,
         "Age": Age,
@@ -155,19 +163,19 @@ def Gastrointestinal_Tract_Symptoms(Whole_grain_products, Age, Height, Body_Weig
     }], columns=features)
 
     targets = {
-        'Heartburn_Re_Examination': 'Печія',
-        'Constipation_Re_Examination': 'Закреп',
-        'Bloating_Re_Examination': 'Здуття',
-        'Insomnia_Re_Examination': 'Безсоння'
+        'Heartburn_Re_Examination': 'Heartburn',
+        'Constipation_Re_Examination': 'Constipation',
+        'Bloating_Re_Examination': 'Bloating',
+        'Insomnia_Re_Examination': 'Insomnia'
     }
-    # 2) Ensure numeric (handle comma decimals if needed)
+    
     cols_to_clean = ["Whole_grain_products", "Age", "Height", "Body_Weight", "Body_Weight_Re_Examination", "Heartburn"] + list(targets.keys())
     for col in cols_to_clean:
         if col in df.columns:
             if df[col].dtype == object:
                 df[col] = df[col].astype(str).str.replace(",", ".", regex=False)
             df[col] = pd.to_numeric(df[col], errors="coerce")
-    # 3) Create BMI_Delta
+            
     df["Height_m"] = df["Height"] / 100
     df["BMI_Delta"] = (df["Body_Weight_Re_Examination"] / (df["Height_m"] ** 2)) - \
                       (df["Body_Weight"] / (df["Height_m"] ** 2))
@@ -182,30 +190,30 @@ def Gastrointestinal_Tract_Symptoms(Whole_grain_products, Age, Height, Body_Weig
 
             X = temp_df[features]
             y = temp_df["Symptom_gone"]
-            # перевірка чи достатньо даних для навчання
+            
             if len(y.unique()) < 2:
                 continue
-            # 7) Train/test split
+                
             X_train, X_test, y_train, y_test = train_test_split(
                 X, y,
                 test_size=0.25,
                 random_state=42
             )
-            # 8) Train model 1: RandomForestClassifier
+            
             model_rf = RandomForestClassifier(
                 n_estimators=300,
                 random_state=42,
                 class_weight="balanced"
             )
             model_rf.fit(X_train, y_train)
-            # 8.1) Train model 2: LogisticRegression
+            
             model_lr = LogisticRegression(
                 max_iter=2000,
                 class_weight="balanced",
                 solver="lbfgs"
             )
             model_lr.fit(X_train, y_train)
-            # ймовірність
+            
             probability_success = model_lr.predict_proba(new_person)[0][1]
 
             importances_rf = pd.Series(model_rf.feature_importances_, index=features)
@@ -213,7 +221,7 @@ def Gastrointestinal_Tract_Symptoms(Whole_grain_products, Age, Height, Body_Weig
 
             coef_lr = pd.Series(model_lr.coef_[0], index=features)
             coef_dict_lr = coef_lr.sort_values(ascending=False).round(4).to_dict()
-            # зберігаємо результат
+            
             results_dict[label] = {
                 "prob": probability_success,
                 "imp_rf": imp_dict_rf,
@@ -320,114 +328,34 @@ def Predict_Muscle_Mass_Secondary(Whole_grain_products, Age, Delta_Weight, Delta
 
     return model.predict(new_person)[0]
 
-bot = telebot.TeleBot('8464210577:AAHrEPRdNsgluESEIb1A9VdrYQnm_SFQXFo')
-##@RehabilitationInTheHospitalBot
+bot = telebot.TeleBot('8520830685:AAGvGEkMvKkecglIwAcfgVORvGYlq7Vd81w')
 patient_symptoms = {}
-
-@bot.callback_query_handler(func=lambda call: call.data in ["amp_arm_r", "amp_arm_l", "amp_leg_r", "amp_leg_l"])
-def handle_amputation_click(call):
-
-    chat_id = call.message.chat.id
-    bot.answer_callback_query(call.id)
-
-    patient_symptoms[chat_id]['amp_type'] = call.data
-
-    if not os.path.exists("Rehabilitation_imputed_whole_grain.csv"):
-        bot.send_message(
-            chat_id,
-            "❌ *ERROR:* Database file `Rehabilitation_imputed_whole_grain.csv` not found. Calculations are impossible. Please contact the developer or administrator.",
-            parse_mode="Markdown"
-        )
-        return
-
-    msg = bot.send_message(chat_id, "Enter the number of days after amputation:")
-    bot.register_next_step_handler(msg, get_amp_days)
-
-def get_amp_days(message):
-    try:
-        patient_symptoms[message.chat.id]['Days_after_amputation'] = float(message.text)
-        msg = bot.send_message(message.chat.id, "Enter the approximate mass of the lost limb (kg, if unknown enter 0):")
-        bot.register_next_step_handler(msg, get_amp_mass)
-    except ValueError:
-        bot.send_message(message.chat.id, "Please enter a number.")
-        bot.register_next_step_handler(message, get_amp_days)
-
-def get_amp_mass(message):
-    try:
-        val = float(message.text.replace(',', '.'))
-        if val == 0: val = np.nan # 0 як невідоме
-        patient_symptoms[message.chat.id]['Estimated_limb_mass_lost_kg'] = val
-        perform_amputation_prediction(message.chat.id)
-    except ValueError:
-        bot.send_message(message.chat.id, "Please enter a number.")
-        bot.register_next_step_handler(message, get_amp_mass)
-
-def perform_amputation_prediction(chat_id):
-    try:
-        data = patient_symptoms.get(chat_id)
-        if not data: return
-
-        amp_type = data['amp_type']
-
-        # налаштування змінних в залежності від типу ампутації
-        if amp_type == 'amp_arm_r':
-            side = "L"
-            level = "upper_limb"
-        elif amp_type == 'amp_arm_l':
-            side = "R"
-            level = "upper_limb"
-        elif amp_type == 'amp_leg_r':
-            side = "R"
-            level = "lower_limb"
-        else: # amp_leg_l
-            side = "R"
-            level = "lower_limb"
-
-        df = pd.read_csv("Rehabilitation_imputed_whole_grain.csv")
-        X, y, feat_cols = prepare_amputation_dataset_v2(
-            df, side_available=side, target_mode="fallback", use_weight_corrected=True
-        )
-
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42)
-        model = RandomForestRegressor(n_estimators=500, random_state=42)
-        model.fit(X_train, y_train)
-
-        # Формування даних пацієнта
-        delta_waist = data['Waist_Final'] - data['Waist_Start']
-        delta_skinfat = data['SkinFat_Final'] - data['SkinFat_Start']
-
-        new_person = {
-            "Whole_grain_products": data['Whole_grain_products'],
-            "Age": data['Age'],
-            "Delta_Skinfold": delta_skinfat,
-            "Delta_Waist": delta_waist,
-            "Days_after_amputation": data['Days_after_amputation'],
-            "Amputation_level": level,
-            "Estimated_limb_mass_lost_kg": data['Estimated_limb_mass_lost_kg'],
-            "Body_Weight": data['Body_Weight'],
-            "Body_Weight_Re_Examination": data['Body_Weight_Re_Examination']
-        }
-
-        new_X = build_new_person_features_v2(new_person, feat_cols)
-        pred = model.predict(new_X)[0]
-
-        result_text = f"✅ *Predicted muscle mass after amputation:* `{round(pred, 2)}`"
-
-        markup = types.InlineKeyboardMarkup()
-        btn_restart = types.InlineKeyboardButton("🔄 Start over", callback_data="restart", style="success")
-        markup.add(btn_restart)
-
-        bot.send_message(chat_id, result_text, parse_mode="Markdown", reply_markup=markup)
-
-    except Exception as e:
-         bot.send_message(chat_id, f"Calculation error: {str(e)}")
-
 
 @bot.message_handler(commands=['start'])
 def start_message(message):
     bot.clear_step_handler_by_chat_id(message.chat.id)
-    patient_symptoms[message.chat.id] = {}
-    msg = bot.send_message(message.chat.id, "Hello! 👋 \nI am the SmartRecover AI bot for restoring muscle strength and movement coordination. I analyze progress and adapt workloads to your current condition. I offer a personalized treatment plan and provide nutritional recommendations.\n\nPlease enter your age:")
+    patient_symptoms[message.chat.id] = {'snaq_score': 0}
+
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+    markup.add("Male", "Female")
+
+    msg = bot.send_message(
+        message.chat.id,
+        "Hello! 👋 \nI am SmartRecover AI bot for muscle strength and motor coordination recovery. I analyze progress and adapt loads to your current condition. I offer personalized treatment plans and nutritional advice.\n\nPlease select your gender:",
+        reply_markup=markup
+    )
+    bot.register_next_step_handler(msg, get_gender)
+
+def get_gender(message):
+    if message.text == "Male":
+        patient_symptoms[message.chat.id]['Gender'] = 'male'
+    elif message.text == "Female":
+        patient_symptoms[message.chat.id]['Gender'] = 'female'
+    else:
+        patient_symptoms[message.chat.id]['Gender'] = 'male'
+
+    markup = types.ReplyKeyboardRemove()
+    msg = bot.send_message(message.chat.id, "Enter your age (full years):", reply_markup=markup)
     bot.register_next_step_handler(msg, get_age)
 
 def get_age(message):
@@ -436,41 +364,146 @@ def get_age(message):
         return
     try:
         patient_symptoms[message.chat.id]['Age'] = int(message.text)
-        msg = bot.send_message(message.chat.id, "Great! Now enter the amount of whole grain products (grams per day):")
-        bot.register_next_step_handler(msg, get_grains)
+        start_snaq_question_1(message.chat.id)
     except ValueError:
-        bot.send_message(message.chat.id, "Please enter a valid number (age).")
-        bot.register_next_step_handler(message, get_age)
+        msg = bot.send_message(message.chat.id, "Please enter a valid integer for age.")
+        bot.register_next_step_handler(msg, get_age)
+
+def start_snaq_question_1(chat_id):
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("Very bad", callback_data="snaq1_1"))
+    markup.add(types.InlineKeyboardButton("Bad", callback_data="snaq1_2"))
+    markup.add(types.InlineKeyboardButton("Average", callback_data="snaq1_3"))
+    markup.add(types.InlineKeyboardButton("Good", callback_data="snaq1_4"))
+    markup.add(types.InlineKeyboardButton("Very good", callback_data="snaq1_5"))
+
+    bot.send_message(chat_id, "SNAQ Questionnaire (1/4): Rate your appetite:", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("snaq1_"))
+def handle_snaq_1(call):
+    chat_id = call.message.chat.id
+    score = int(call.data.split('_')[1])
+    patient_symptoms[chat_id]['snaq_score'] += score
+
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("Very tasteless", callback_data="snaq2_1"))
+    markup.add(types.InlineKeyboardButton("Tasteless", callback_data="snaq2_2"))
+    markup.add(types.InlineKeyboardButton("Average", callback_data="snaq2_3"))
+    markup.add(types.InlineKeyboardButton("Tasty", callback_data="snaq2_4"))
+    markup.add(types.InlineKeyboardButton("Very tasty", callback_data="snaq2_5"))
+
+    bot.edit_message_text("SNAQ Questionnaire (2/4): How does the food taste to you?", chat_id, call.message.message_id, reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("snaq2_"))
+def handle_snaq_2(call):
+    chat_id = call.message.chat.id
+    score = int(call.data.split('_')[1])
+    patient_symptoms[chat_id]['snaq_score'] += score
+
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("Full after a few spoons", callback_data="snaq3_1"))
+    markup.add(types.InlineKeyboardButton("Full after 1/3 of the meal", callback_data="snaq3_2"))
+    markup.add(types.InlineKeyboardButton("Full after 1/2 of the meal", callback_data="snaq3_3"))
+    markup.add(types.InlineKeyboardButton("Full after the whole meal", callback_data="snaq3_4"))
+    markup.add(types.InlineKeyboardButton("Rarely eat to my heart's content", callback_data="snaq3_5"))
+
+    bot.edit_message_text("SNAQ Questionnaire (3/4): When I eat, I feel...", chat_id, call.message.message_id, reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("snaq3_"))
+def handle_snaq_3(call):
+    chat_id = call.message.chat.id
+    score = int(call.data.split('_')[1])
+    patient_symptoms[chat_id]['snaq_score'] += score
+
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("Less than 1 meal", callback_data="snaq4_1"))
+    markup.add(types.InlineKeyboardButton("1 meal", callback_data="snaq4_2"))
+    markup.add(types.InlineKeyboardButton("2 meals", callback_data="snaq4_3"))
+    markup.add(types.InlineKeyboardButton("3 meals", callback_data="snaq4_4"))
+    markup.add(types.InlineKeyboardButton("More than 3 meals", callback_data="snaq4_5"))
+
+    bot.edit_message_text("SNAQ Questionnaire (4/4): Usually, in a day I have...", chat_id, call.message.message_id, reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("snaq4_"))
+def handle_snaq_4(call):
+    chat_id = call.message.chat.id
+    score = int(call.data.split('_')[1])
+    patient_symptoms[chat_id]['snaq_score'] += score
+
+    total_score = patient_symptoms[chat_id]['snaq_score']
+    if total_score <= 14:
+        bot.send_message(chat_id, f"⚠️ *ATTENTION! Your SNAQ score: {total_score}*. \nThis indicates a significant risk of weight loss and malnutrition. Consultation with a dietitian is recommended.", parse_mode="Markdown")
+    else:
+        bot.send_message(chat_id, f"✅ *Your SNAQ score: {total_score}*. \nRisk of malnutrition is low.", parse_mode="Markdown")
+
+    msg = bot.send_message(chat_id, "Enter the amount of whole grain products (grams per day):")
+    bot.register_next_step_handler(msg, get_grains)
 
 def get_grains(message):
     try:
         val = float(message.text.replace(',', '.'))
         patient_symptoms[message.chat.id]['Whole_grain_products'] = val
-        msg = bot.send_message(message.chat.id, "Enter your height (e.g., 1.75):")
+
+        msg = bot.send_message(
+            message.chat.id,
+            "Enter your height (in meters, e.g., 1.75).\n\n"
+            "❗️ *If your height cannot be measured due to amputation*, enter `0`. "
+            "The bot will calculate your estimated height based on knee height.",
+            parse_mode="Markdown"
+        )
         bot.register_next_step_handler(msg, get_height)
     except ValueError:
-        bot.send_message(message.chat.id, "Please enter a number.")
-        bot.register_next_step_handler(message, get_grains)
+        msg = bot.send_message(message.chat.id, "Please enter a valid number.")
+        bot.register_next_step_handler(msg, get_grains)
 
 def get_height(message):
+    chat_id = message.chat.id
+    text = message.text.strip().replace(',', '.')
+
+    if text == '0':
+        msg = bot.send_message(
+            chat_id,
+            "For alternative height calculation, measure your *Knee Height (KH)*:\n"
+            "Bend your knee at a 90° angle and measure the distance from the heel to the anterior surface of the thigh (above the kneecap).\n\n"
+            "Enter the obtained value in *centimeters* (e.g., 52):",
+            parse_mode="Markdown"
+        )
+        bot.register_next_step_handler(msg, calculate_alternative_height)
+        return
+
     try:
-        val = float(message.text.replace(',', '.'))
-        if val < 0.5:
-            bot.send_message(message.chat.id, "Height cannot be less than 0.5 m. Try again.")
-            bot.register_next_step_handler(message, get_height)
-            return
-        if 3.0 < val < 53.0:
-            bot.send_message(message.chat.id, "Please enter height correctly (in meters, e.g., 1.75).")
-            bot.register_next_step_handler(message, get_height)
-            return
+        val = float(text)
         if val > 53:
             val = val / 100
-        patient_symptoms[message.chat.id]['Height'] = val
-        msg = bot.send_message(message.chat.id, "Thank you! Enter your INITIAL weight (kg):")
+        patient_symptoms[chat_id]['Height'] = val
+        msg = bot.send_message(chat_id, "Thank you! Enter your INITIAL weight (before treatment, kg):")
         bot.register_next_step_handler(msg, get_weight_start)
     except ValueError:
-        bot.send_message(message.chat.id, "Please enter a number.")
-        bot.register_next_step_handler(message, get_height)
+        msg = bot.send_message(chat_id, "Please enter a valid number.")
+        bot.register_next_step_handler(msg, get_height)
+
+def calculate_alternative_height(message):
+    chat_id = message.chat.id
+    try:
+        vk = float(message.text.replace(',', '.'))
+        gender = patient_symptoms[chat_id].get('Gender', 'male')
+        age = patient_symptoms[chat_id].get('Age', 30)
+
+        if gender == 'male':
+            height_cm = (2.02 * vk) - (0.04 * age) + 64.19
+        else:
+            height_cm = (1.83 * vk) - (0.24 * age) + 84.88
+
+        height_m = height_cm / 100.0
+        patient_symptoms[chat_id]['Height'] = height_m
+
+        bot.send_message(chat_id, f"✅ Estimated calculated height: *{round(height_m, 2)} m*", parse_mode="Markdown")
+
+        msg = bot.send_message(chat_id, "Thank you! Enter your INITIAL weight (before treatment, kg):")
+        bot.register_next_step_handler(msg, get_weight_start)
+    except ValueError:
+        msg = bot.send_message(chat_id, "Please enter a valid number in centimeters.")
+        bot.register_next_step_handler(msg, calculate_alternative_height)
 
 def get_weight_start(message):
     try:
@@ -491,7 +524,7 @@ def get_weight_final(message):
         msg = bot.send_message(message.chat.id, "Enter your INITIAL waist circumference before treatment (cm):")
         bot.register_next_step_handler(msg, get_waist_start)
     except ValueError:
-        bot.send_message(message.chat.id, "Please enter a number.")
+        bot.send_message(message.chat.id, "Please enter a valid number.")
         bot.register_next_step_handler(message, get_weight_final)
 
 def get_waist_start(message):
@@ -501,7 +534,7 @@ def get_waist_start(message):
         msg = bot.send_message(message.chat.id, "Enter your waist circumference AFTER rehabilitation (cm):")
         bot.register_next_step_handler(msg, get_waist_final)
     except ValueError:
-        bot.send_message(message.chat.id, "Please enter a number.")
+        bot.send_message(message.chat.id, "Please enter a valid number.")
         bot.register_next_step_handler(message, get_waist_start)
 
 def get_waist_final(message):
@@ -511,7 +544,7 @@ def get_waist_final(message):
         msg = bot.send_message(message.chat.id, "Enter your INITIAL skinfold thickness (mm):")
         bot.register_next_step_handler(msg, get_skinfat_start)
     except ValueError:
-        bot.send_message(message.chat.id, "Please enter a number.")
+        bot.send_message(message.chat.id, "Please enter a valid number.")
         bot.register_next_step_handler(message, get_waist_final)
 
 def get_skinfat_start(message):
@@ -521,7 +554,7 @@ def get_skinfat_start(message):
         msg = bot.send_message(message.chat.id, "Enter your skinfold thickness AFTER rehabilitation (mm):")
         bot.register_next_step_handler(msg, get_skinfat_final)
     except ValueError:
-        bot.send_message(message.chat.id, "Please enter a number.")
+        bot.send_message(message.chat.id, "Please enter a valid number.")
         bot.register_next_step_handler(message, get_skinfat_start)
 
 def get_skinfat_final(message):
@@ -529,10 +562,10 @@ def get_skinfat_final(message):
         val = float(message.text.replace(',', '.'))
         patient_symptoms[message.chat.id]['SkinFat_Final'] = val
 
-        msg = bot.send_message(message.chat.id, "Enter your INITIAL right shoulder circumference (cm):")
+        msg = bot.send_message(message.chat.id, "Enter the INITIAL circumference of the right shoulder (cm):")
         bot.register_next_step_handler(msg, get_shoulder_start)
     except ValueError:
-        bot.send_message(message.chat.id, "Please enter a number.")
+        bot.send_message(message.chat.id, "Please enter a valid number.")
         bot.register_next_step_handler(message, get_skinfat_final)
 
 def get_shoulder_start(message):
@@ -540,10 +573,10 @@ def get_shoulder_start(message):
         val = float(message.text.replace(',', '.'))
         patient_symptoms[message.chat.id]['Shoulder_R_Start'] = val
 
-        msg = bot.send_message(message.chat.id, "Enter your right shoulder circumference AFTER rehabilitation (cm):")
+        msg = bot.send_message(message.chat.id, "Enter the circumference of the right shoulder AFTER rehabilitation (cm):")
         bot.register_next_step_handler(msg, get_shoulder_final)
     except ValueError:
-        bot.send_message(message.chat.id, "Please enter a number.")
+        bot.send_message(message.chat.id, "Please enter a valid number.")
         bot.register_next_step_handler(message, get_shoulder_start)
 
 def get_shoulder_final(message):
@@ -552,7 +585,7 @@ def get_shoulder_final(message):
         patient_symptoms[message.chat.id]['Shoulder_R_Final'] = val
         perform_prediction(message.chat.id)
     except ValueError:
-        bot.send_message(message.chat.id, "Please enter a number.")
+        bot.send_message(message.chat.id, "Please enter a valid number.")
         bot.register_next_step_handler(message, get_shoulder_final)
 
 def perform_prediction(chat_id):
@@ -574,46 +607,36 @@ def perform_prediction(chat_id):
 
             safe_name = symptom_name.replace('_', '\\_')
 
-            # Переклад симптомів, якщо вони вказані в targets українською:
-            translation_dict = {
-                "Печія": "Heartburn",
-                "Закреп": "Constipation",
-                "Здуття": "Bloating",
-                "Безсоння": "Insomnia"
-            }
-            eng_symptom = translation_dict.get(safe_name.replace('\\_', '_'), safe_name)
-
             if percent > 50:
-                res_header = f"✅ *{eng_symptom} will disappear* (probability: {percent}%)"
+                res_header = f"✅ {safe_name} will disappear (probability: {percent}%)"
             else:
-                res_header = f"⚠️ *{eng_symptom} may remain* (chance of disappearance: {percent}%)"
+                res_header = f"⚠️ {safe_name} might remain (chance of disappearance: {percent}%)"
 
             rf_coefs = "\n".join([f"    - {k.replace('_', '\\_')}: {v}" for k, v in res['imp_rf'].items()])
             lr_coefs = "\n".join([f"    - {k.replace('_', '\\_')}: {v}" for k, v in res['coef_lr'].items()])
 
             symptom_msg = f"{res_header}\n\n"
             symptom_msg += f"Model: *RandomForestClassifier*\n"
-            symptom_msg += f"📈 Impact Coefficients:\n{rf_coefs}\n\n"
+            symptom_msg += f"📈 Impact coefficients:\n{rf_coefs}\n\n"
             symptom_msg += f"Model: *Logistic Regression*\n"
-            symptom_msg += f"📈 Impact Coefficients:\n{lr_coefs}\n"
+            symptom_msg += f"📈 Impact coefficients:\n{lr_coefs}\n"
             symptom_msg += f"\n--------------------------------------"
 
             bot.send_message(chat_id, symptom_msg, parse_mode="Markdown")
 
         edu_msg = (
             f"Model: *RandomForestClassifier*\n"
-            f"*🔸Core concept:* This is a 'council' of hundreds of independent decision trees. Each tree asks a series of questions (e.g., 'Is there swelling?', if yes - 'What is the pain level?'). The algorithm doesn't just add factors up, but analyzes their complex combinations. It performs better with non-linear data, where one factor might only be important if another is present.\n"
-            f"*🔸Interpretation:* Based on Feature Importance. Example: The model might say that 'Physical activity level' is the most important factor, but it won't give a simple linear formula. It shows a ranking: what influenced the forecast accuracy the most. This provides an understanding of the main priorities in patient rehabilitation.\n\n"
-
+            f"*🔸Essence:* This is a 'consortium' of hundreds of independent decision trees. Each tree asks a series of questions (e.g., 'Is there swelling?', if yes — 'What is the pain level?'). The algorithm doesn't just add factors up, it analyzes their complex combinations. It works better with nonlinear data, where one factor might be important only in the presence of another.\n"
+            f"*🔸Interpretation:* Based on Feature Importance. Example: The model might say that 'Physical activity level' is the most important factor, but it won't provide a simple linear formula. It shows a ranking: what influenced the prediction accuracy the most. This provides an understanding of the main priorities in the patient's rehabilitation.\n\n"
             f"Model: *Logistic Regression*\n\n"
-            f"*🔸Core concept:* This model works like a 'weighted scoring scale'. It assumes that each factor (e.g., age, injury type, dietary protein level) linearly adds or subtracts from the chances of success. This is a classic statistical approach where we look for a direct link: 'the more of factor A, the higher the probability of result B'.\n"
-            f"*🔸Interpretation:* Maximum transparency. The doctor sees the coefficients. Example: 'Each additional gram of whole grains in the diet reduces the risk of a symptom (insomnia) by a certain percentage'. This allows the doctor to clearly state which specific parameter affects the patient and by how much."
+            f"*🔸Essence:* This is a model that acts like a 'weighted scoring scale'. It assumes that each factor (e.g., age, injury type, protein level in diet) directly adds or subtracts chances of success. This is a classic statistical approach where we look for a direct link: 'the more of factor A, the higher the probability of result B'.\n"
+            f"*🔸Interpretation:* Maximally transparent. The doctor sees the coefficients. Example: 'Every additional gram of whole grain in the diet reduces the risk of the symptom (insomnia) by a certain percentage'. This allows the doctor to clearly state exactly which parameter influences the patient and how strongly."
         )
         bot.send_message(chat_id, edu_msg, parse_mode="Markdown")
 
         markup = types.InlineKeyboardMarkup()
-        btn_muscle = types.InlineKeyboardButton("💪 Calculate muscle mass", callback_data="predict_muscle", style="primary")
-        btn_restart = types.InlineKeyboardButton("🔄 Start over", callback_data="restart", style="success")
+        btn_muscle = types.InlineKeyboardButton("💪 Calculate Muscle Mass", callback_data="predict_muscle")
+        btn_restart = types.InlineKeyboardButton("🔄 Start Over", callback_data="restart")
         markup.row(btn_muscle, btn_restart)
 
         bot.send_message(chat_id, "Choose the next action:", reply_markup=markup)
@@ -650,55 +673,60 @@ def handle_muscle_prediction_click(call):
     )
 
     if primary_mass is not None and secondary_mass is not None:
-        result_text = (f"✅ *Predicted muscle mass value (primary):* `{round(primary_mass, 2)}`\n\n"
-                       f"✅ *Predicted muscle mass value (secondary):* `{round(secondary_mass, 2)}`\n\n"
-                       f"If the patient has amputations, select them below (you can choose multiple) and click 'Confirm selection':")
+        result_text = (f"✅ *Predicted Muscle Mass (primary):* `{round(primary_mass, 2)}`\n\n"
+                       f"✅ *Predicted Muscle Mass (secondary):* `{round(secondary_mass, 2)}`\n\n"
+                       f"Do you want to account for amputation?")
 
-        patient_symptoms[chat_id]['selected_amps'] = []
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🦿 Yes, select amputation", callback_data="start_amputation_menu"))
+        markup.add(types.InlineKeyboardButton("🔄 Start Over", callback_data="restart"))
 
-        markup = generate_amputation_keyboard([])
         bot.send_message(chat_id, result_text, parse_mode="Markdown", reply_markup=markup)
     else:
-        bot.send_message(chat_id, "Error: Insufficient data in the CSV file or missing required columns.")
+        bot.send_message(chat_id, "Error: Not enough data for calculation.")
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "start_amputation_menu")
+def handle_start_amputation_menu(call):
+    chat_id = call.message.chat.id
+    bot.answer_callback_query(call.id)
+
+    patient_symptoms[chat_id]['selected_amps'] = []
+
+    markup = generate_amputation_keyboard([])
+    bot.send_message(chat_id, "Select amputated segments:", reply_markup=markup)
 
 
 def generate_amputation_keyboard(selected_amps):
     markup = types.InlineKeyboardMarkup()
+    segments = [
+        ("Shoulder", "shoulder"), ("Forearm", "forearm"), ("Hand", "hand"),
+        ("Thigh", "thigh"), ("Calf", "calf"), ("Foot", "foot")
+    ]
+    for name, code in segments:
+        l_code = f"amp_{code}_l"
+        r_code = f"amp_{code}_r"
 
-    text_arm_l = "✅ Left arm" if "amp_arm_l" in selected_amps else "Left arm"
-    text_arm_r = "✅ Right arm" if "amp_arm_r" in selected_amps else "Right arm"
-    text_leg_l = "✅ Left leg" if "amp_leg_l" in selected_amps else "Left leg"
-    text_leg_r = "✅ Right leg" if "amp_leg_r" in selected_amps else "Right leg"
+        btn_text_l = f"✅ {name} (L)" if l_code in selected_amps else f"{name} (L)"
+        btn_text_r = f"✅ {name} (R)" if r_code in selected_amps else f"{name} (R)"
 
-    btn_amp_arm_l = types.InlineKeyboardButton(text_arm_l, callback_data="toggle_amp_arm_l")
-    btn_amp_arm_r = types.InlineKeyboardButton(text_arm_r, callback_data="toggle_amp_arm_r")
-    btn_amp_leg_l = types.InlineKeyboardButton(text_leg_l, callback_data="toggle_amp_leg_l")
-    btn_amp_leg_r = types.InlineKeyboardButton(text_leg_r, callback_data="toggle_amp_leg_r")
-
-    markup.row(btn_amp_arm_l, btn_amp_arm_r)
-    markup.row(btn_amp_leg_l, btn_amp_leg_r)
+        markup.row(
+            types.InlineKeyboardButton(btn_text_l, callback_data=f"toggle_{l_code}"),
+            types.InlineKeyboardButton(btn_text_r, callback_data=f"toggle_{r_code}")
+        )
 
     if selected_amps:
-        btn_confirm = types.InlineKeyboardButton("✅ Confirm selection", callback_data="confirm_amputations", style="primary")
-        markup.add(btn_confirm)
-
-    btn_restart = types.InlineKeyboardButton("🔄 Start over", callback_data="restart", style="success")
-    markup.add(btn_restart)
-
+        markup.add(types.InlineKeyboardButton("✅ Confirm Selection", callback_data="confirm_amputations"))
+    markup.add(types.InlineKeyboardButton("🔄 Start Over", callback_data="restart"))
     return markup
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("toggle_amp_"))
 def handle_amputation_toggle(call):
     chat_id = call.message.chat.id
-
     amp_type = call.data.replace("toggle_", "")
 
-    if 'selected_amps' not in patient_symptoms[chat_id]:
-        patient_symptoms[chat_id]['selected_amps'] = []
-
-    selected = patient_symptoms[chat_id]['selected_amps']
-
+    selected = patient_symptoms[chat_id].get('selected_amps', [])
     if amp_type in selected:
         selected.remove(amp_type)
     else:
@@ -716,55 +744,60 @@ def handle_confirm_amputations(call):
     chat_id = call.message.chat.id
     bot.answer_callback_query(call.id)
 
-    selected_amps = patient_symptoms[chat_id].get('selected_amps', [])
+    data = patient_symptoms.get(chat_id, {})
+    selected_amps = data.get('selected_amps', [])
+    gender = data.get('Gender', 'male')
+
     if not selected_amps:
-        bot.send_message(chat_id, "You haven't selected any amputations.")
+        bot.send_message(chat_id, "You did not select any amputation.")
         return
 
-    msg = bot.send_message(chat_id, "Enter the number of days since the last amputation:")
-    bot.register_next_step_handler(msg, get_amp_days)
+    total_lost_pct = 0.0
+    for amp in selected_amps:
+        parts = amp.split('_')
+        if len(parts) >= 2:
+            segment = parts[1]
+            total_lost_pct += AMPUTATION_PERCENTAGES[gender].get(segment, 0.0)
 
-def get_amp_days(message):
-    try:
-        patient_symptoms[message.chat.id]['Days_after_amputation'] = float(message.text)
-        msg = bot.send_message(message.chat.id, "Enter the approximate total mass of the lost limbs (kg, enter 0 if unknown):")
-        bot.register_next_step_handler(msg, get_amp_mass)
-    except ValueError:
-        bot.send_message(message.chat.id, "Please enter a number.")
-        bot.register_next_step_handler(message, get_amp_days)
+    current_weight = data.get('Body_Weight_Re_Examination', data.get('Body_Weight', 80))
+    height = data.get('Height', 1.75)
 
-def get_amp_mass(message):
-    try:
-        val = float(message.text.replace(',', '.'))
-        if val == 0: val = np.nan
-        patient_symptoms[message.chat.id]['Estimated_limb_mass_lost_kg'] = val
-        perform_amputation_prediction(message.chat.id)
-    except ValueError:
-        bot.send_message(message.chat.id, "Please enter a number.")
-        bot.register_next_step_handler(message, get_amp_mass)
+    if total_lost_pct < 100:
+        corrected_weight = (current_weight / (100 - total_lost_pct)) * 100
+    else:
+        corrected_weight = current_weight
 
-def perform_amputation_prediction(chat_id):
+    corrected_bmi = corrected_weight / (height ** 2)
+    lost_mass_kg = corrected_weight - current_weight
+    patient_symptoms[chat_id]['Estimated_limb_mass_lost_kg'] = lost_mass_kg
+
+    msg_text = (
+        f"📊 *Anthropometry after amputation:*\n\n"
+        f"Lost mass: `{round(total_lost_pct, 2)}%`\n"
+        f"Estimated weight: `{round(corrected_weight, 2)} kg`\n"
+        f"BMI: `{round(corrected_bmi, 2)}`\n"
+        f"Mass of lost segments: `{round(lost_mass_kg, 2)} kg`\n\n"
+        f"Enter the number of days after amputation:"
+    )
+
+    msg = bot.send_message(chat_id, msg_text, parse_mode="Markdown")
+    bot.register_next_step_handler(msg, process_amp_days_and_predict)
+
+
+def process_amp_days_and_predict(message):
+    chat_id = message.chat.id
     try:
+        patient_symptoms[chat_id]['Days_after_amputation'] = float(message.text)
+
         data = patient_symptoms.get(chat_id)
-        if not data: return
-
         selected_amps = data.get('selected_amps', [])
 
-        if 'amp_arm_r' in selected_amps and 'amp_arm_l' not in selected_amps:
-            side = "L"
-        elif 'amp_arm_l' in selected_amps and 'amp_arm_r' not in selected_amps:
-            side = "R"
-        else:
-            side = "R"
-
-        if 'amp_arm_r' in selected_amps or 'amp_arm_l' in selected_amps:
-            level = "upper_limb"
-        else:
-            level = "lower_limb"
+        is_upper = any(seg in amp for amp in selected_amps for seg in ['shoulder', 'forearm', 'hand'])
+        level = "upper_limb" if is_upper else "lower_limb"
 
         df = pd.read_csv("Rehabilitation_imputed_whole_grain.csv")
         X, y, feat_cols = prepare_amputation_dataset_v2(
-            df, side_available=side, target_mode="fallback", use_weight_corrected=True
+            df, side_available="R", target_mode="fallback", use_weight_corrected=True
         )
 
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42)
@@ -789,23 +822,17 @@ def perform_amputation_prediction(chat_id):
         new_X = build_new_person_features_v2(new_person, feat_cols)
         pred = model.predict(new_X)[0]
 
-        amp_names = {
-            "amp_arm_l": "Left arm", "amp_arm_r": "Right arm",
-            "amp_leg_l": "Left leg", "amp_leg_r": "Right leg"
-        }
-        human_readable_amps = ", ".join([amp_names[a] for a in selected_amps])
-
-        result_text = (f"Amputations: *{human_readable_amps}*\n"
-                       f"✅ *Predicted muscle mass after amputation:* `{round(pred, 2)}`")
+        result_text = f"✅ *Final Muscle Mass Prediction after amputation:* `{round(pred, 2)}`"
 
         markup = types.InlineKeyboardMarkup()
-        btn_restart = types.InlineKeyboardButton("🔄 Start over", callback_data="restart", style="success")
-        markup.add(btn_restart)
+        markup.add(types.InlineKeyboardButton("🔄 Start Over", callback_data="restart"))
 
         bot.send_message(chat_id, result_text, parse_mode="Markdown", reply_markup=markup)
 
     except Exception as e:
-         bot.send_message(chat_id, f"Calculation error: {str(e)}")
+         msg = bot.send_message(chat_id, f"Enter a number (number of days):")
+         bot.register_next_step_handler(msg, process_amp_days_and_predict)
+
 
 @bot.callback_query_handler(func=lambda call: call.data == "restart")
 def handle_restart_click(call):
@@ -814,4 +841,3 @@ def handle_restart_click(call):
 
 if __name__ == '__main__':
     bot.polling(none_stop=True)
-
