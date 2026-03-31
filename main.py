@@ -719,7 +719,15 @@ def perform_prediction(chat_id):
             Body_Weight_Re_Examination=data['Body_Weight_Re_Examination'],
             Heartburn=1
         )
-
+# timeFrame для печії
+        hb_time = Predict_Heartburn_Time(
+            Whole_grain_products=data.get('Whole_grain_products', 0),
+            Age=data.get('Age', 0),
+            Body_Weight=data.get('Body_Weight', 0),
+            date_of_examination=data.get('exam_date', ''),
+            date_of_re_examination=data.get('reexam_date', '')
+        )
+        
         for symptom_name, res in all_results.items():
             prob = res['prob']
             percent = round(prob * 100, 1)
@@ -735,6 +743,16 @@ def perform_prediction(chat_id):
             lr_coefs = "\n".join([f"    - {k.replace('_', '\\_')}: {v}" for k, v in res['coef_lr'].items()])
 
             symptom_msg = f"{res_header}\n\n"
+
+            # умова для timeframe: percent > 50
+            if symptom_name == 'Heartburn' and percent > 50 and hb_time:
+                symptom_msg += (
+                    f"⏳ *Heartburn Disappearance Timeframe:*\n"
+                    f"Planned rehab duration: `{hb_time['planned']} days`\n"
+                    f"Expected to disappear in: *{hb_time['days']} days*\n"
+                    f"Estimated date: *{hb_time['date']}*\n\n"
+                )
+
             symptom_msg += f"Model: *RandomForestClassifier*\n"
             symptom_msg += f"📈 Impact coefficients:\n{rf_coefs}\n\n"
             symptom_msg += f"Model: *Logistic Regression*\n"
