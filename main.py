@@ -1,3 +1,4 @@
+import calendar
 import os
 import numpy as np
 import pandas as pd
@@ -6,7 +7,9 @@ from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.linear_model import LogisticRegression
 import telebot
 from telebot import types
+from telebot.apihelper import ApiTelegramException
 
+# відсотки маси тіла для різних сегментів кінцівок (за методичкою)
 AMPUTATION_PERCENTAGES = {
     'male': {
         'shoulder': 3.25, 'forearm': 1.87, 'hand': 0.65,
@@ -18,6 +21,25 @@ AMPUTATION_PERCENTAGES = {
     }
 }
 
+# безпечний парсинг дат(від помилок в даних)
+def safe_parse_date(date_str):
+    if pd.isna(date_str):
+        return pd.NaT
+    s = str(date_str).strip()
+    if "." not in s:
+        return pd.NaT
+    parts = s.split(".")
+    if len(parts) != 3:
+        return pd.NaT
+    try:
+        day, month, year = int(parts[0]), int(parts[1]), int(parts[2])
+        last_day = calendar.monthrange(year, month)[1]
+        day = min(day, last_day)
+        return pd.Timestamp(year=year, month=month, day=day)
+    except:
+        return pd.NaT
+
+# прогнозування мязової маси після ампутації
 def prepare_amputation_dataset_v2(
     df: pd.DataFrame,
     side_available: str = "R",
@@ -50,9 +72,9 @@ def prepare_amputation_dataset_v2(
         if c not in df.columns:
             df[c] = np.nan
 
+    # вираховування різниці ланих до і після лікування
     df["Delta_Shoulder"] = df[shoulder_1] - df[shoulder_0]
     df["Delta_Grip"] = df[grip_1] - df[grip_0]
-
     df["Delta_Skinfold"] = (
         df["ThicknessSkinFatParaumbilicalAreaRectusAbdominisMuscle_Re_Examination"]
         - df["ThicknessSkinFatParaumbilicalAreaRectusAbdominisMuscle"]
@@ -67,6 +89,7 @@ def prepare_amputation_dataset_v2(
     if limb_mass_col not in df.columns:
         df[limb_mass_col] = np.nan
 
+    # виправлення ваги пацієнта з урахуванням втраченої кінцівки
     df["BodyWeight_corrected"] = df["Body_Weight"]
     df["BodyWeight_corrected_Re_Exam"] = df["Body_Weight_Re_Examination"]
 
@@ -80,6 +103,7 @@ def prepare_amputation_dataset_v2(
     else:
         df["Delta_Weight_corrected"] = df["Delta_Weight"]
 
+    #  розрахунок м'язової маси
     if target_mode == "upper":
         df["Muscle_mass_proxy"] = df[["Delta_Shoulder", "Delta_Grip"]].sum(axis=1, min_count=1)
     elif target_mode == "fallback":
@@ -112,6 +136,7 @@ def prepare_amputation_dataset_v2(
 
     return X, y, feat_cols
 
+# новий пацієнт
 def build_new_person_features_v2(new_person: dict, feat_cols: list):
     row = dict(new_person)
     row.setdefault("Days_after_amputation", np.nan)
@@ -142,20 +167,21 @@ def build_new_person_features_v2(new_person: dict, feat_cols: list):
 
     return new_df[feat_cols]
 
+#функція прогнозування ймовірності зникнення симптомів шлунково кишкового тракту
 def Gastrointestinal_Tract_Symptoms(Whole_grain_products, Age, Height, Body_Weight, Body_Weight_Re_Examination, Heartburn):
     try:
-        df = pd.read_csv("Rehabilitation_imputed_whole_grain.csv")
+        df = pd.read_csv("Rehabilitation_imputed_whole_grain_timeframe.csv")
     except FileNotFoundError:
         return {}
 
     height_m = Height
-
     bmi_old = Body_Weight / (height_m ** 2)
     bmi_new = Body_Weight_Re_Examination / (height_m ** 2)
     bmi_delta = bmi_new - bmi_old
 
     features = ["Whole_grain_products", "Age", "BMI_Delta"]
 
+    #датафрейм для нового пацієнта
     new_person = pd.DataFrame([{
         "Whole_grain_products": Whole_grain_products,
         "Age": Age,
@@ -168,14 +194,14 @@ def Gastrointestinal_Tract_Symptoms(Whole_grain_products, Age, Height, Body_Weig
         'Bloating_Re_Examination': 'Bloating',
         'Insomnia_Re_Examination': 'Insomnia'
     }
-    
+
     cols_to_clean = ["Whole_grain_products", "Age", "Height", "Body_Weight", "Body_Weight_Re_Examination", "Heartburn"] + list(targets.keys())
     for col in cols_to_clean:
         if col in df.columns:
             if df[col].dtype == object:
                 df[col] = df[col].astype(str).str.replace(",", ".", regex=False)
             df[col] = pd.to_numeric(df[col], errors="coerce")
-            
+
     df["Height_m"] = df["Height"] / 100
     df["BMI_Delta"] = (df["Body_Weight_Re_Examination"] / (df["Height_m"] ** 2)) - \
                       (df["Body_Weight"] / (df["Height_m"] ** 2))
@@ -184,44 +210,35 @@ def Gastrointestinal_Tract_Symptoms(Whole_grain_products, Age, Height, Body_Weig
 
     for col_name, label in targets.items():
         if col_name in df.columns:
-
             temp_df = df.dropna(subset=features + [col_name]).copy()
             temp_df["Symptom_gone"] = (temp_df[col_name] == 0).astype(int)
 
             X = temp_df[features]
             y = temp_df["Symptom_gone"]
-            
+
             if len(y.unique()) < 2:
                 continue
-                
+
             X_train, X_test, y_train, y_test = train_test_split(
-                X, y,
-                test_size=0.25,
-                random_state=42
+                X, y, test_size=0.25, random_state=42
             )
-            
-            model_rf = RandomForestClassifier(
-                n_estimators=300,
-                random_state=42,
-                class_weight="balanced"
-            )
+
+            model_rf = RandomForestClassifier(n_estimators=300, random_state=42, class_weight="balanced")
             model_rf.fit(X_train, y_train)
-            
-            model_lr = LogisticRegression(
-                max_iter=2000,
-                class_weight="balanced",
-                solver="lbfgs"
-            )
+
+            model_lr = LogisticRegression(max_iter=2000, class_weight="balanced", solver="lbfgs")
             model_lr.fit(X_train, y_train)
-            
+
+            #ймовірність зникнення симптому
             probability_success = model_lr.predict_proba(new_person)[0][1]
+
 
             importances_rf = pd.Series(model_rf.feature_importances_, index=features)
             imp_dict_rf = importances_rf.sort_values(ascending=False).round(4).to_dict()
 
             coef_lr = pd.Series(model_lr.coef_[0], index=features)
             coef_dict_lr = coef_lr.sort_values(ascending=False).round(4).to_dict()
-            
+
             results_dict[label] = {
                 "prob": probability_success,
                 "imp_rf": imp_dict_rf,
@@ -230,9 +247,10 @@ def Gastrointestinal_Tract_Symptoms(Whole_grain_products, Age, Height, Body_Weig
 
     return results_dict
 
+# базовий прогноз м'язової маси
 def Predict_Muscle_Mass_Primary(Whole_grain_products, Age):
     try:
-        df = pd.read_csv("Rehabilitation_imputed_whole_grain.csv")
+        df = pd.read_csv("Rehabilitation_imputed_whole_grain_timeframe.csv")
     except FileNotFoundError:
         return None
 
@@ -261,16 +279,16 @@ def Predict_Muscle_Mass_Primary(Whole_grain_products, Age):
     y = data["Muscle_mass"]
 
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42)
-
     model = RandomForestRegressor(n_estimators=400, random_state=42)
     model.fit(X_train, y_train)
 
     new_person = pd.DataFrame([{"Whole_grain_products": Whole_grain_products, "Age": Age}])
     return model.predict(new_person)[0]
 
+# розширений прогноз м'язової маси
 def Predict_Muscle_Mass_Secondary(Whole_grain_products, Age, Delta_Weight, Delta_Waist, Delta_Skinfold):
     try:
-        df = pd.read_csv("Rehabilitation_imputed_whole_grain.csv")
+        df = pd.read_csv("Rehabilitation_imputed_whole_grain_timeframe.csv")
     except FileNotFoundError:
         return None
 
@@ -314,7 +332,6 @@ def Predict_Muscle_Mass_Secondary(Whole_grain_products, Age, Delta_Weight, Delta
     y = data["Muscle_mass"]
 
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42)
-
     model = RandomForestRegressor(n_estimators=500, random_state=42)
     model.fit(X_train, y_train)
 
@@ -328,7 +345,82 @@ def Predict_Muscle_Mass_Secondary(Whole_grain_products, Age, Delta_Weight, Delta
 
     return model.predict(new_person)[0]
 
-bot = telebot.TeleBot('8464210577:AAHrEPRdNsgluESEIb1A9VdrYQnm_SFQXFo')
+#нова фун прогнозування часу до зникнення печії
+def Predict_Heartburn_Time(Whole_grain_products, Age, Body_Weight, date_of_examination, date_of_re_examination):
+    df = pd.read_csv("Rehabilitation_imputed_whole_grain_timeframe.csv")
+
+    if "Date_Of_Examination" not in df.columns or "Date_of_Re_Examination" not in df.columns or "Heartburn_Re_Examination" not in df.columns:
+        return None
+
+    df["exam_date"] = df["Date_Of_Examination"].apply(safe_parse_date)
+    df["reexam_date"] = df["Date_of_Re_Examination"].apply(safe_parse_date)
+
+    # вираховуємо кількість днів за яку зник симптом в історичних даних
+    def compute_days(row):
+        if row.get("Heartburn", 0) == 0:
+            return 0
+        s_date = safe_parse_date(row.get("Heartburn_Re_Examination", ""))
+        e_date = row["exam_date"]
+        if pd.notna(s_date) and pd.notna(e_date):
+            delta = (s_date - e_date).days
+            if delta >= 0:
+                return delta
+        return np.nan
+
+    df["days_to_hb_disappearance"] = df.apply(compute_days, axis=1)
+    df["planned_rehab_days"] = (df["reexam_date"] - df["exam_date"]).dt.days
+
+    train_df = df.dropna(subset=["days_to_hb_disappearance"]).copy()
+
+    for col in ["Whole_grain_products", "Age", "Body_Weight"]:
+        if col in train_df.columns:
+            if train_df[col].dtype == object:
+                train_df[col] = train_df[col].astype(str).str.replace(",", ".", regex=False)
+            train_df[col] = pd.to_numeric(train_df[col], errors="coerce")
+
+    # ознаки для навчання моделі часу зникнення печії
+    features = ["planned_rehab_days", "Age", "Whole_grain_products", "Body_Weight"]
+    train_df = train_df.dropna(subset=features)
+
+    if train_df.empty or len(train_df) < 5:
+        return None
+
+    X = train_df[features]
+    y = train_df["days_to_hb_disappearance"]
+
+    # навчання моделі регресії для передбачення кількості днів
+    model = RandomForestRegressor(n_estimators=200, random_state=42, max_depth=5)
+    model.fit(X, y)
+
+    ex_d = safe_parse_date(date_of_examination)
+    rex_d = safe_parse_date(date_of_re_examination)
+    if pd.isna(ex_d) or pd.isna(rex_d):
+        return None
+
+    planned_days = (rex_d - ex_d).days
+    if planned_days <= 0:
+        return None
+
+    new_person = pd.DataFrame([{
+        "planned_rehab_days": planned_days,
+        "Age": Age,
+        "Whole_grain_products": Whole_grain_products,
+        "Body_Weight": Body_Weight
+    }])
+
+    # отримання результату та обмеження його в межах курсу
+    pred_days = model.predict(new_person)[0]
+    pred_days = max(0, min(round(pred_days), planned_days))
+    pred_date = ex_d + pd.Timedelta(days=pred_days)
+
+    return {
+        "days": pred_days,
+        "date": pred_date.strftime("%d.%m.%Y"),
+        "planned": planned_days
+    }
+#RehabilitationInTheHospitalBot
+
+bot = telebot.TeleBot('8520830685:AAGvGEkMvKkecglIwAcfgVORvGYlq7Vd81w')
 patient_symptoms = {}
 
 @bot.message_handler(commands=['start'])
@@ -358,17 +450,29 @@ def get_gender(message):
     msg = bot.send_message(message.chat.id, "Enter your age (full years):", reply_markup=markup)
     bot.register_next_step_handler(msg, get_age)
 
+# отримання віку пацієнта
 def get_age(message):
     if message.text == '/start':
         start_message(message)
         return
     try:
         patient_symptoms[message.chat.id]['Age'] = int(message.text)
-        start_snaq_question_1(message.chat.id)
+        msg = bot.send_message(message.chat.id, "Enter the START date of rehabilitation (format: DD.MM.YYYY, e.g., 01.02.2026):")
+        bot.register_next_step_handler(msg, get_start_date)
     except ValueError:
         msg = bot.send_message(message.chat.id, "Please enter a valid integer for age.")
         bot.register_next_step_handler(msg, get_age)
 
+def get_start_date(message):
+    patient_symptoms[message.chat.id]['exam_date'] = message.text.strip()
+    msg = bot.send_message(message.chat.id, "Enter the PLANNED END date of rehabilitation (format: DD.MM.YYYY, e.g., 01.03.2026):")
+    bot.register_next_step_handler(msg, get_end_date)
+
+def get_end_date(message):
+    patient_symptoms[message.chat.id]['reexam_date'] = message.text.strip()
+    start_snaq_question_1(message.chat.id)
+
+# опитувальник snaq для оцінки ризику недоїдання
 def start_snaq_question_1(chat_id):
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton("Very bad", callback_data="snaq1_1"))
@@ -392,7 +496,12 @@ def handle_snaq_1(call):
     markup.add(types.InlineKeyboardButton("Tasty", callback_data="snaq2_4"))
     markup.add(types.InlineKeyboardButton("Very tasty", callback_data="snaq2_5"))
 
-    bot.edit_message_text("SNAQ Questionnaire (2/4): How does the food taste to you?", chat_id, call.message.message_id, reply_markup=markup)
+   #помилка подвійного кліку
+    try:
+        bot.edit_message_text("SNAQ Questionnaire (2/4): How does the food taste to you?", chat_id, call.message.message_id, reply_markup=markup)
+    except ApiTelegramException as e:
+        if "message is not modified" not in str(e):
+            raise e
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("snaq2_"))
 def handle_snaq_2(call):
@@ -407,7 +516,11 @@ def handle_snaq_2(call):
     markup.add(types.InlineKeyboardButton("Full after the whole meal", callback_data="snaq3_4"))
     markup.add(types.InlineKeyboardButton("Rarely eat to my heart's content", callback_data="snaq3_5"))
 
-    bot.edit_message_text("SNAQ Questionnaire (3/4): When I eat, I feel...", chat_id, call.message.message_id, reply_markup=markup)
+    try:
+        bot.edit_message_text("SNAQ Questionnaire (3/4): When I eat, I feel...", chat_id, call.message.message_id, reply_markup=markup)
+    except ApiTelegramException as e:
+        if "message is not modified" not in str(e):
+            raise e
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("snaq3_"))
 def handle_snaq_3(call):
@@ -422,7 +535,11 @@ def handle_snaq_3(call):
     markup.add(types.InlineKeyboardButton("3 meals", callback_data="snaq4_4"))
     markup.add(types.InlineKeyboardButton("More than 3 meals", callback_data="snaq4_5"))
 
-    bot.edit_message_text("SNAQ Questionnaire (4/4): Usually, in a day I have...", chat_id, call.message.message_id, reply_markup=markup)
+    try:
+        bot.edit_message_text("SNAQ Questionnaire (4/4): Usually, in a day I have...", chat_id, call.message.message_id, reply_markup=markup)
+    except ApiTelegramException as e:
+        if "message is not modified" not in str(e):
+            raise e
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("snaq4_"))
 def handle_snaq_4(call):
@@ -482,6 +599,7 @@ def get_height(message):
         msg = bot.send_message(chat_id, "Please enter a valid number.")
         bot.register_next_step_handler(msg, get_height)
 
+# обчислення зросту за висотою коліна (якщо пацієнт не може стояти через ампутацію)
 def calculate_alternative_height(message):
     chat_id = message.chat.id
     try:
@@ -588,6 +706,7 @@ def get_shoulder_final(message):
         bot.send_message(message.chat.id, "Please enter a valid number.")
         bot.register_next_step_handler(message, get_shoulder_final)
 
+# головна функц виводу результатів прогнозування
 def perform_prediction(chat_id):
     try:
         data = patient_symptoms[chat_id]
@@ -624,8 +743,27 @@ def perform_prediction(chat_id):
 
             bot.send_message(chat_id, symptom_msg, parse_mode="Markdown")
 
+        # вивід блоку з датою зникнення печії
+        hb_time = Predict_Heartburn_Time(
+            Whole_grain_products=data.get('Whole_grain_products', 0),
+            Age=data.get('Age', 0),
+            Body_Weight=data.get('Body_Weight', 0),
+            date_of_examination=data.get('exam_date', ''),
+            date_of_re_examination=data.get('reexam_date', '')
+        )
+
+        if hb_time:
+            time_msg = (
+                f"⏳ *Heartburn Disappearance Timeframe:*\n\n"
+                f"Planned rehab duration: `{hb_time['planned']} days`\n"
+                f"Expected to disappear in: *{hb_time['days']} days*\n"
+                f"Estimated date: *{hb_time['date']}*"
+            )
+            bot.send_message(chat_id, time_msg, parse_mode="Markdown")
+
+
         edu_msg = (
-            f"Model: *RandomForestClassifier*\n"
+            f"Model: *RandomForestClassifier*\n\n"
             f"*🔸Essence:* This is a 'consortium' of hundreds of independent decision trees. Each tree asks a series of questions (e.g., 'Is there swelling?', if yes — 'What is the pain level?'). The algorithm doesn't just add factors up, it analyzes their complex combinations. It works better with nonlinear data, where one factor might be important only in the presence of another.\n"
             f"*🔸Interpretation:* Based on Feature Importance. Example: The model might say that 'Physical activity level' is the most important factor, but it won't provide a simple linear formula. It shows a ranking: what influenced the prediction accuracy the most. This provides an understanding of the main priorities in the patient's rehabilitation.\n\n"
             f"Model: *Logistic Regression*\n\n"
@@ -762,6 +900,7 @@ def handle_confirm_amputations(call):
     current_weight = data.get('Body_Weight_Re_Examination', data.get('Body_Weight', 80))
     height = data.get('Height', 1.75)
 
+    # коригування ваги з урахуванням втраченої кінцівки
     if total_lost_pct < 100:
         corrected_weight = (current_weight / (100 - total_lost_pct)) * 100
     else:
@@ -783,7 +922,6 @@ def handle_confirm_amputations(call):
     msg = bot.send_message(chat_id, msg_text, parse_mode="Markdown")
     bot.register_next_step_handler(msg, process_amp_days_and_predict)
 
-
 def process_amp_days_and_predict(message):
     chat_id = message.chat.id
     try:
@@ -795,7 +933,7 @@ def process_amp_days_and_predict(message):
         is_upper = any(seg in amp for amp in selected_amps for seg in ['shoulder', 'forearm', 'hand'])
         level = "upper_limb" if is_upper else "lower_limb"
 
-        df = pd.read_csv("Rehabilitation_imputed_whole_grain.csv")
+        df = pd.read_csv("Rehabilitation_imputed_whole_grain_timeframe.csv")
         X, y, feat_cols = prepare_amputation_dataset_v2(
             df, side_available="R", target_mode="fallback", use_weight_corrected=True
         )
@@ -830,8 +968,8 @@ def process_amp_days_and_predict(message):
         bot.send_message(chat_id, result_text, parse_mode="Markdown", reply_markup=markup)
 
     except Exception as e:
-         msg = bot.send_message(chat_id, f"Enter a number (number of days):")
-         bot.register_next_step_handler(msg, process_amp_days_and_predict)
+        msg = bot.send_message(chat_id, f"Enter a number (number of days):")
+        bot.register_next_step_handler(msg, process_amp_days_and_predict)
 
 
 @bot.callback_query_handler(func=lambda call: call.data == "restart")
@@ -841,3 +979,5 @@ def handle_restart_click(call):
 
 if __name__ == '__main__':
     bot.polling(none_stop=True)
+
+
