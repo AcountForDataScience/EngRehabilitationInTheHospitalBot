@@ -770,16 +770,6 @@ def perform_prediction(chat_id):
             date_of_re_examination=data.get('reexam_date', '')
         )
 
-        if hb_time:
-            time_msg = (
-                f"⏳ *Heartburn Disappearance Timeframe:*\n\n"
-                f"Planned rehab duration: `{hb_time['planned']} days`\n"
-                f"Expected to disappear in: *{hb_time['days']} days*\n"
-                f"Estimated date: *{hb_time['date']}*"
-            )
-            bot.send_message(chat_id, time_msg, parse_mode="Markdown")
-
-
         edu_msg = (
             f"Model: *RandomForestClassifier*\n\n"
             f"*🔸Essence:* This is a 'consortium' of hundreds of independent decision trees. Each tree asks a series of questions (e.g., 'Is there swelling?', if yes — 'What is the pain level?'). The algorithm doesn't just add factors up, it analyzes their complex combinations. It works better with nonlinear data, where one factor might be important only in the presence of another.\n"
