@@ -420,7 +420,7 @@ def Predict_Heartburn_Time(Whole_grain_products, Age, Body_Weight, date_of_exami
     }
 #RehabilitationInTheHospitalBot
 
-bot = telebot.TeleBot('8520830685:AAGvGEkMvKkecglIwAcfgVORvGYlq7Vd81w')
+bot = telebot.TeleBot('8464210577:AAHrEPRdNsgluESEIb1A9VdrYQnm_SFQXFo')
 patient_symptoms = {}
 
 @bot.message_handler(commands=['start'])
