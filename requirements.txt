@@ -3,3 +3,4 @@ pandas
 numpy
 lifelines
 scikit-learn
+m2cgen
