@@ -11,7 +11,6 @@ from telebot.apihelper import ApiTelegramException
 import math
 
 #словник із відсотком маси тіла для різних сегментів
-#використовується для коригування ваги при ампутаціях
 AMPUTATION_PERCENTAGES = {
     'male': {
         'shoulder': 3.25, 'forearm': 1.87, 'hand': 0.65,
@@ -24,10 +23,8 @@ AMPUTATION_PERCENTAGES = {
 }
 
 #таблиці перцентилів UAMC за Фрісанчо
-#допомагають визначити нутритивний статус залежно від віку та статі
 FRISANCHO_UAMC = {
     'male': {
-        #формат: мін вік, макс вік: p5, p10, p25, p50, p75, p90, p95
         (1, 2): [110, 113, 119, 127, 135, 144, 147],
         (2, 3): [111, 114, 122, 130, 140, 146, 150],
         (3, 4): [117, 123, 131, 137, 143, 148, 153],
@@ -81,7 +78,6 @@ FRISANCHO_UAMC = {
     }
 }
 
-#функція розрахунку ІМТ та його класифікації за стандартами ВООЗ
 def get_bmi_interpretation(weight, height_m):
     bmi = weight / (height_m ** 2)
     if bmi < 16.0: text = "chronic energy deficiency grade III (CED III)"
@@ -94,7 +90,6 @@ def get_bmi_interpretation(weight, height_m):
     else: text = "obese class III"
     return round(bmi, 1), text
 
-#формування текстового повідомлення з результатами розрахунку ІМТ
 def get_bmi_text(weight, height_m):
     bmi_val, bmi_status = get_bmi_interpretation(weight, height_m)
     return (
@@ -103,7 +98,6 @@ def get_bmi_text(weight, height_m):
         f"Normal range: 18.5–24.9 kg/m²"
     )
 
-#допоміжна функція для безпечного перетворення рядка дати у формат pandas Timestamp
 def safe_parse_date(date_str):
     if pd.isna(date_str): return pd.NaT
     s = str(date_str).strip()
@@ -118,15 +112,12 @@ def safe_parse_date(date_str):
     except:
         return pd.NaT
 
-#допоміжна функція для очищення чисел у рядках
 def clean_float_string(s):
     s = str(s).strip()
     if s.endswith(".0") and s.count(".") == 1:
         return s[:-2]
     return s
 
-#функція оцінки антропометрії: обчислює UAMC
-#та класифікує її спираючись на таблиці Фрісанчо
 def evaluate_anthropometry(gender, age, mac_cm, tsf_mm):
     try:
         age = float(age)
@@ -134,7 +125,7 @@ def evaluate_anthropometry(gender, age, mac_cm, tsf_mm):
         tsf_mm = float(tsf_mm)
 
         mac_mm = mac_cm * 10.0
-        uamc_mm = mac_mm - (math.pi * tsf_mm) #розрахунок UAMC
+        uamc_mm = mac_mm - (math.pi * tsf_mm) 
 
         gender_key = 'male' if gender.lower() in ['male', 'm'] else 'female'
         table = FRISANCHO_UAMC[gender_key]
@@ -146,8 +137,6 @@ def evaluate_anthropometry(gender, age, mac_cm, tsf_mm):
                 break
 
         p5, p10, p25, p50, p75, p90, p95 = selected_row
-        
-        #розрахунок 15 перцентилю для коректного порівняння
         p15 = p10 + (p25 - p10) * 0.3333
 
         if uamc_mm > p95:
@@ -170,8 +159,6 @@ def evaluate_anthropometry(gender, age, mac_cm, tsf_mm):
     except Exception:
         return None
 
-#підготовка датасету для навчання моделі щодо пацієнтів з ампутаціями
-#розраховує різницю показників до та після обстеження
 def prepare_amputation_dataset_v2(
     df: pd.DataFrame,
     side_available: str = "R",
@@ -185,7 +172,6 @@ def prepare_amputation_dataset_v2(
     df = df.copy()
     s = side_available.upper().strip()
 
-    #перевірка та ініціалізація необхідних колонок порожніми значеннями якщо їх немає
     needed = [
         "Whole_grain_products", "Age",
         "ThicknessSkinFatParaumbilicalAreaRectusAbdominisMuscle",
@@ -203,7 +189,6 @@ def prepare_amputation_dataset_v2(
         if c not in df.columns:
             df[c] = np.nan
 
-    #обчислення різниці між показниками до та після
     df["Delta_UAMC_cm"] = df[shoulder_1] - df[shoulder_0]
     df["Delta_Skinfold"] = (
         df["ThicknessSkinFatParaumbilicalAreaRectusAbdominisMuscle_Re_Examination"]
@@ -222,7 +207,6 @@ def prepare_amputation_dataset_v2(
     df["BodyWeight_corrected"] = df["Body_Weight"]
     df["BodyWeight_corrected_Re_Exam"] = df["Body_Weight_Re_Examination"]
 
-    #коригування ваги для пацієнтів з ампутацією
     if use_weight_corrected:
         known = df[limb_mass_col].notna()
         df.loc[known, "BodyWeight_corrected"] = df.loc[known, "Body_Weight"] + df.loc[known, limb_mass_col]
@@ -243,7 +227,6 @@ def prepare_amputation_dataset_v2(
         limb_mass_col,
     ]
 
-    #one-hot кодування рівня ампутації для моделі
     level_dummies = pd.get_dummies(df[amputation_level_col].astype(str).str.lower(), prefix="amp_level")
     df = pd.concat([df, level_dummies], axis=1)
     feat_cols += list(level_dummies.columns)
@@ -259,7 +242,6 @@ def prepare_amputation_dataset_v2(
 
     return X, y, feat_cols
 
-#створення ознак для нового пацієнта
 def build_new_person_features_v2(new_person: dict, feat_cols: list):
     row = dict(new_person)
     row.setdefault("Days_after_amputation", np.nan)
@@ -290,11 +272,8 @@ def build_new_person_features_v2(new_person: dict, feat_cols: list):
 
     return new_df[feat_cols]
 
-#ml функція: прогнозує ймовірність зникнення симптомів ШКТ
-#використовує дві моделі: RandomForestClassifier та LogisticRegression
 def Gastrointestinal_Tract_Symptoms(Whole_grain_products, Age, Height, Body_Weight, Body_Weight_Re_Examination, active_symptoms):
     try:
-        #завантаження історичних даних для навчання моделей
         df = pd.read_csv("Rehabilitation_imputed_whole_grain_timeframe.csv")
     except FileNotFoundError:
         return {}
@@ -320,7 +299,6 @@ def Gastrointestinal_Tract_Symptoms(Whole_grain_products, Age, Height, Body_Weig
     if not targets:
         return {}
 
-    #очищення даних перед навчанням
     cols_to_clean = ["Whole_grain_products", "Age", "Height", "Body_Weight", "Body_Weight_Re_Examination"]
     for col in cols_to_clean:
         if col in df.columns:
@@ -348,7 +326,6 @@ def Gastrointestinal_Tract_Symptoms(Whole_grain_products, Age, Height, Body_Weig
             X = temp_df[features]
             y = temp_df["Symptom_resolution_status"]
 
-            #перевірка наявності обох класів для навчання
             if len(y.unique()) < 2:
                 default_prob = float(y.iloc[0]) if not y.empty else 0.0
                 results_dict[label] = {
@@ -360,17 +337,14 @@ def Gastrointestinal_Tract_Symptoms(Whole_grain_products, Age, Height, Body_Weig
 
             X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42)
 
-            #навчання моделі
             model_rf = RandomForestClassifier(n_estimators=300, random_state=42, class_weight="balanced")
             model_rf.fit(X_train, y_train)
 
-            #навчання моделі
             model_lr = LogisticRegression(max_iter=2000, class_weight="balanced", solver="lbfgs")
             model_lr.fit(X_train, y_train)
 
             probability_success = model_lr.predict_proba(new_person)[0][1]
 
-            #визначення важливості ознак
             importances_rf = pd.Series(model_rf.feature_importances_, index=features)
             imp_dict_rf = importances_rf.sort_values(ascending=False).round(4).to_dict()
 
@@ -385,7 +359,6 @@ def Gastrointestinal_Tract_Symptoms(Whole_grain_products, Age, Height, Body_Weig
 
     return results_dict
 
-#ml функція: базовий прогноз зміни мязової маси на основі харчування та віку
 def Predict_Muscle_Mass_Primary(Whole_grain_products, Age):
     try:
         df = pd.read_csv("Rehabilitation_imputed_whole_grain_timeframe.csv")
@@ -421,7 +394,6 @@ def Predict_Muscle_Mass_Primary(Whole_grain_products, Age):
     new_person = pd.DataFrame([{"Whole_grain_products": Whole_grain_products, "Age": Age}])
     return model.predict(new_person)[0]
 
-#ml функція: більш точний прогноз зміни мязової маси з урахуванням зміни ваги талії та складок
 def Predict_Muscle_Mass_Secondary(Whole_grain_products, Age, Delta_Weight, Delta_Waist, Delta_Skinfold):
     try:
         df = pd.read_csv("Rehabilitation_imputed_whole_grain_timeframe.csv")
@@ -477,7 +449,6 @@ def Predict_Muscle_Mass_Secondary(Whole_grain_products, Age, Delta_Weight, Delta
 
     return model.predict(new_person)[0]
 
-#ml функція: прогнозує кількість днів необхідну для зникнення симптому
 def Predict_Symptom_Time(symptom_col_reexam, symptom_col_start, Whole_grain_products, Age, Body_Weight, date_of_examination, date_of_re_examination):
     try:
         df = pd.read_csv("Rehabilitation_imputed_whole_grain_timeframe.csv")
@@ -490,7 +461,6 @@ def Predict_Symptom_Time(symptom_col_reexam, symptom_col_start, Whole_grain_prod
     df["exam_date"] = df["Date_Of_Examination"].apply(safe_parse_date)
     df["reexam_date"] = df["Date_of_Re_Examination"].apply(safe_parse_date)
 
-    #обчислення реальної кількості днів до зникнення симптому
     def compute_days(row):
         start_val = clean_float_string(row.get(symptom_col_start, "0"))
         reexam_val = clean_float_string(row.get(symptom_col_reexam, "0"))
@@ -546,7 +516,7 @@ def Predict_Symptom_Time(symptom_col_reexam, symptom_col_start, Whole_grain_prod
     }])
 
     pred_days = model.predict(new_person)[0]
-    pred_days = max(0, min(round(pred_days), planned_days)) #обмеження прогнозу здоровим глуздом
+    pred_days = max(0, min(round(pred_days), planned_days))
     pred_date = ex_d + pd.Timedelta(days=pred_days)
 
     return {
@@ -555,7 +525,6 @@ def Predict_Symptom_Time(symptom_col_reexam, symptom_col_start, Whole_grain_prod
         "planned": planned_days
     }
 
-#додає інформаційну довідку про методики розрахунку в кінці повідомлень бота
 def get_evidence_base_text():
     return (
         "*Clinical Interpretation & Evidence Base:*\n"
@@ -565,7 +534,6 @@ def get_evidence_base_text():
         "⚠️ *Notice: This tool provides statistical ML estimations to support recovery tracking and does NOT replace professional clinical judgment.*"
     )
 
-#формує фінальне текстове повідомлення з клінічною інтерпретацією зміни мязової маси
 def generate_muscle_forecast_text(delta_uamc_cm, baseline_uamc_mm, days=30):
     baseline_cm = round(baseline_uamc_mm / 10.0, 1)
     forecast_cm = round(baseline_cm + delta_uamc_cm, 1)
@@ -589,14 +557,25 @@ def generate_muscle_forecast_text(delta_uamc_cm, baseline_uamc_mm, days=30):
         f"Reference for growth with adequate nutritional support: +0.3…+1.0 cm / month\n"
     )
 
+# Використовуємо змінні середовища для токена (БЕЗПЕКА!)
+bot = telebot.TeleBot(os.getenv('TELEGRAM_BOT_TOKEN') or 'ТУТ_МАЄ_БУТИ_ТВІЙ_НОВИЙ_ТОКЕН')
 
-#блок телеграм бота
-bot = telebot.TeleBot('8464210577:AAHrEPRdNsgluESEIb1A9VdrYQnm_SFQXFo')
-
-#глобальний словник для зберігання сесій користувачів
 patient_symptoms = {}
 
-#обробник команди /start ініціалізує процес збору даних з нуля
+# ГЛОБАЛЬНИЙ ОБРОБНИК КОМАНДИ /exit
+@bot.message_handler(commands=['exit'])
+def exit_message(message):
+    chat_id = message.chat.id
+    if chat_id in patient_symptoms:
+        del patient_symptoms[chat_id]
+    bot.clear_step_handler_by_chat_id(chat_id)
+    markup = types.ReplyKeyboardRemove()
+    bot.send_message(
+        chat_id, 
+        "Роботу SmartRecover AI завершено. Усі тимчасові дані очищено. 🛑\nЩоб почати нову сесію, введіть /start.", 
+        reply_markup=markup
+    )
+
 @bot.message_handler(commands=['start'])
 def start_message(message):
     bot.clear_step_handler_by_chat_id(message.chat.id)
@@ -612,15 +591,21 @@ def start_message(message):
         "Hello! 👋\nI am SmartRecover AI, a bot for muscle strength and motor coordination recovery. I analyze progress and adapt loads to your condition. I provide personalized treatment plans and nutritional advice.\n\nPlease select your gender:",
         reply_markup=markup
     )
-    bot.register_next_step_handler(msg, get_gender) #перехід на наступний крок збору
+    bot.register_next_step_handler(msg, get_gender)
 
 def get_gender(message):
+    if message.text == '/exit':
+        exit_message(message)
+        return
     patient_symptoms[message.chat.id]['Gender'] = 'male' if message.text == "Male" else 'female'
     markup = types.ReplyKeyboardRemove()
     msg = bot.send_message(message.chat.id, "Enter age (full years):", reply_markup=markup)
     bot.register_next_step_handler(msg, get_age)
 
 def get_age(message):
+    if message.text == '/exit':
+        exit_message(message)
+        return
     if message.text == '/start':
         start_message(message)
         return
@@ -635,6 +620,9 @@ def get_age(message):
         bot.register_next_step_handler(msg, get_age)
 
 def get_rehab_stage(message):
+    if message.text == '/exit':
+        exit_message(message)
+        return
     stage = message.text
     if stage not in ["At the beginning", "In progress", "Completed"]:
         stage = "At the beginning"
@@ -644,11 +632,13 @@ def get_rehab_stage(message):
     bot.register_next_step_handler(msg, get_start_date)
 
 def get_start_date(message):
+    if message.text == '/exit':
+        exit_message(message)
+        return
     chat_id = message.chat.id
     patient_symptoms[chat_id]['exam_date'] = message.text.strip()
     stage = patient_symptoms[chat_id]['Stage']
     
-    #логіка гілкування залежно від того на якому етапі перебуває пацієнт
     if stage == "At the beginning":
         start_snaq_question_1(chat_id)
     elif stage == "In progress":
@@ -659,10 +649,12 @@ def get_start_date(message):
         bot.register_next_step_handler(msg, get_end_date)
 
 def get_end_date(message):
+    if message.text == '/exit':
+        exit_message(message)
+        return
     patient_symptoms[message.chat.id]['reexam_date'] = message.text.strip()
     start_snaq_question_1(message.chat.id)
 
-#опитувальник SNAQ
 def start_snaq_question_1(chat_id):
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton("Very bad", callback_data="snaq1_1"))
@@ -714,7 +706,6 @@ def handle_snaq_4(call):
     patient_symptoms[chat_id]['snaq_score'] += int(call.data.split('_')[1])
     total_score = patient_symptoms[chat_id]['snaq_score']
     
-    #висновок за опитувальником оцінка ризику втрати ваги
     if total_score <= 14:
         conclusion = "significant risk of weight loss ≥5% within 6 months."
     else:
@@ -731,7 +722,6 @@ def handle_snaq_4(call):
     patient_symptoms[chat_id]['active_symptoms'] = []
     send_symptoms_keyboard(chat_id)
 
-#динамічна інлайн-клавіатура для вибору наявних симптомів
 def send_symptoms_keyboard(chat_id, message_id=None):
     selected = patient_symptoms[chat_id].get('active_symptoms', [])
     markup = types.InlineKeyboardMarkup()
@@ -747,7 +737,6 @@ def send_symptoms_keyboard(chat_id, message_id=None):
     if message_id: bot.edit_message_text(text, chat_id, message_id, reply_markup=markup)
     else: bot.send_message(chat_id, text, reply_markup=markup)
 
-#обробник перемикання галочок на кнопках симптомів
 @bot.callback_query_handler(func=lambda call: call.data.startswith("symp_") and call.data != "symp_continue")
 def handle_symptoms_toggle(call):
     chat_id = call.message.chat.id
@@ -766,8 +755,10 @@ def handle_symp_continue(call):
     msg = bot.send_message(chat_id, "Enter whole grain products amount (g/day):")
     bot.register_next_step_handler(msg, get_grains)
 
-#збір додаткових фізичних даних: харчування, зріст, вага, обєми тіла
 def get_grains(message):
+    if message.text == '/exit':
+        exit_message(message)
+        return
     try:
         patient_symptoms[message.chat.id]['Whole_grain_products'] = float(message.text.replace(',', '.'))
         msg = bot.send_message(
@@ -782,9 +773,12 @@ def get_grains(message):
         bot.register_next_step_handler(msg, get_grains)
 
 def get_height(message):
+    if message.text == '/exit':
+        exit_message(message)
+        return
     chat_id = message.chat.id
     text = message.text.strip().replace(',', '.')
-    #спеціальна обробка для пацієнтів з ампутацією ніг
+    
     if text == '0':
         msg = bot.send_message(
             chat_id,
@@ -797,7 +791,7 @@ def get_height(message):
         return
     try:
         val = float(text)
-        if val > 3.0: val = val / 100.0 #автоматична конвертація см в метри
+        if val > 3.0: val = val / 100.0 
         patient_symptoms[chat_id]['Height'] = val
         msg = bot.send_message(chat_id, "Thank you! Enter INITIAL weight (kg):")
         bot.register_next_step_handler(msg, get_weight_start)
@@ -805,8 +799,10 @@ def get_height(message):
         msg = bot.send_message(chat_id, "Please enter a valid number.")
         bot.register_next_step_handler(msg, get_height)
 
-#розрахунок приблизного зросту пацієнта за висотою коліна
 def calculate_alternative_height(message):
+    if message.text == '/exit':
+        exit_message(message)
+        return
     chat_id = message.chat.id
     try:
         vk = float(message.text.replace(',', '.'))
@@ -825,8 +821,10 @@ def calculate_alternative_height(message):
         msg = bot.send_message(chat_id, "Please enter a valid number (cm).")
         bot.register_next_step_handler(msg, calculate_alternative_height)
 
-#ланцюжок отримання антропометрії залежно від обраного етапу лікування
 def get_weight_start(message):
+    if message.text == '/exit':
+        exit_message(message)
+        return
     chat_id = message.chat.id
     try:
         val = float(message.text.replace(',', '.'))
@@ -843,6 +841,9 @@ def get_weight_start(message):
         bot.register_next_step_handler(message, get_weight_start)
 
 def get_weight_final(message):
+    if message.text == '/exit':
+        exit_message(message)
+        return
     chat_id = message.chat.id
     try:
         val = float(message.text.replace(',', '.'))
@@ -855,6 +856,9 @@ def get_weight_final(message):
         bot.register_next_step_handler(message, get_weight_final)
 
 def get_waist_start(message):
+    if message.text == '/exit':
+        exit_message(message)
+        return
     chat_id = message.chat.id
     try:
         val = float(message.text.replace(',', '.'))
@@ -870,6 +874,9 @@ def get_waist_start(message):
         bot.register_next_step_handler(message, get_waist_start)
 
 def get_waist_final(message):
+    if message.text == '/exit':
+        exit_message(message)
+        return
     try:
         val = float(message.text.replace(',', '.'))
         patient_symptoms[message.chat.id]['Waist_Final'] = val
@@ -880,6 +887,9 @@ def get_waist_final(message):
         bot.register_next_step_handler(message, get_waist_final)
 
 def get_triceps_start(message):
+    if message.text == '/exit':
+        exit_message(message)
+        return
     chat_id = message.chat.id
     try:
         val = float(message.text.replace(',', '.'))
@@ -895,6 +905,9 @@ def get_triceps_start(message):
         bot.register_next_step_handler(message, get_triceps_start)
 
 def get_triceps_final(message):
+    if message.text == '/exit':
+        exit_message(message)
+        return
     try:
         val = float(message.text.replace(',', '.'))
         patient_symptoms[message.chat.id]['Triceps_Final'] = val
@@ -905,6 +918,9 @@ def get_triceps_final(message):
         bot.register_next_step_handler(message, get_triceps_final)
 
 def get_skinfat_start(message):
+    if message.text == '/exit':
+        exit_message(message)
+        return
     chat_id = message.chat.id
     try:
         val = float(message.text.replace(',', '.'))
@@ -920,6 +936,9 @@ def get_skinfat_start(message):
         bot.register_next_step_handler(message, get_skinfat_start)
 
 def get_skinfat_final(message):
+    if message.text == '/exit':
+        exit_message(message)
+        return
     try:
         val = float(message.text.replace(',', '.'))
         patient_symptoms[message.chat.id]['SkinFat_Final'] = val
@@ -930,12 +949,14 @@ def get_skinfat_final(message):
         bot.register_next_step_handler(message, get_skinfat_final)
 
 def get_shoulder_start(message):
+    if message.text == '/exit':
+        exit_message(message)
+        return
     chat_id = message.chat.id
     try:
         val = float(message.text.replace(',', '.'))
         patient_symptoms[chat_id]['Shoulder_R_Start'] = val
         
-        #завершальний етап вводу даних для стадії на початку
         if patient_symptoms[chat_id]['Stage'] == "At the beginning":
             perform_initial_assessment(chat_id)
         else:
@@ -946,16 +967,17 @@ def get_shoulder_start(message):
         bot.register_next_step_handler(message, get_shoulder_start)
 
 def get_shoulder_final(message):
+    if message.text == '/exit':
+        exit_message(message)
+        return
     try:
         val = float(message.text.replace(',', '.'))
         patient_symptoms[message.chat.id]['Shoulder_R_Final'] = val
-        #завершальний етап вводу даних для інших стадій
         perform_prediction(message.chat.id)
     except ValueError:
         bot.send_message(message.chat.id, "Please enter a valid number.")
         bot.register_next_step_handler(message, get_shoulder_final)
 
-#виведення розяснювального тексту про формулу UAMC
 def send_uamc_explanation(chat_id):
     uamc_text = (
         "*Upper Arm Muscle Circumference (UAMC) Calculation*\n"
@@ -968,8 +990,6 @@ def send_uamc_explanation(chat_id):
     )
     bot.send_message(chat_id, uamc_text, parse_mode="Markdown")
 
-#проведення лише первинної оцінки
-#розраховує та виводить показники але не робить прогнозів на майбутнє
 def perform_initial_assessment(chat_id):
     try:
         data = patient_symptoms[chat_id]
@@ -1000,13 +1020,11 @@ def perform_initial_assessment(chat_id):
     except Exception as e:
         bot.send_message(chat_id, f"An error occurred during initial analysis: {str(e)}")
 
-#головна функція для виконання ML передбачень для симптомів та виведення антропометричних змін
 def perform_prediction(chat_id):
     try:
         data = patient_symptoms[chat_id]
         active_symptoms = data.get('active_symptoms', [])
 
-        #аналіз симптомів та їх імовірності зникнення
         if active_symptoms:
             all_results = Gastrointestinal_Tract_Symptoms(
                 Whole_grain_products=data['Whole_grain_products'],
@@ -1031,7 +1049,6 @@ def perform_prediction(chat_id):
                 res_header = f"✅ {safe_name} will disappear (probability: {percent}%)" if percent > 50 else f"⚠️ {safe_name} might remain (chance of disappearance: {percent}%)"
                 symptom_msg = f"{res_header}\n\n"
 
-                #прогнозування кількості днів до зникнення симптому
                 if percent > 50 and symptom_name in symptom_columns:
                     reexam_col, start_col = symptom_columns[symptom_name]
                     symp_time = Predict_Symptom_Time(
@@ -1061,7 +1078,6 @@ def perform_prediction(chat_id):
                                 f"Estimated date: *{symp_time['date']}*\n\n"
                             )
 
-                #виведення коефіцієнтів важливості для прозорості моделі
                 rf_coefs = "\n".join([f"    - {k.replace('_', '\\_')}: {v}" for k, v in res.get('imp_rf', {}).items()])
                 lr_coefs = "\n".join([f"    - {k.replace('_', '\\_')}: {v}" for k, v in res.get('coef_lr', {}).items()])
 
@@ -1079,7 +1095,6 @@ def perform_prediction(chat_id):
             )
             bot.send_message(chat_id, edu_msg, parse_mode="Markdown")
 
-        #оцінка та порівняння антропометрії
         anthro_eval_start = evaluate_anthropometry(
             gender=data.get('Gender', 'male'),
             age=data.get('Age', 30),
@@ -1112,7 +1127,6 @@ def perform_prediction(chat_id):
 
         send_uamc_explanation(chat_id)
 
-        #пропозиція розрахувати подальшу динаміку мязової маси
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("Calculate Muscle Mass", callback_data="predict_muscle"))
         markup.add(types.InlineKeyboardButton("🔄 Start Over", callback_data="restart"))
@@ -1121,7 +1135,6 @@ def perform_prediction(chat_id):
     except Exception as e:
         bot.send_message(chat_id, f"An error occurred during analysis: {str(e)}")
 
-#обробник кнопки розрахунку прогнозу мязової маси
 @bot.callback_query_handler(func=lambda call: call.data == "predict_muscle")
 def handle_muscle_prediction_click(call):
     try: bot.answer_callback_query(call.id)
@@ -1157,7 +1170,6 @@ def handle_muscle_prediction_click(call):
 
     if primary_mass is not None:
         result_text = generate_muscle_forecast_text(primary_mass, baseline_uamc_mm, days)
-        #меню запиту щодо ампутації
         result_text += f"\nDo you want to account for amputation?"
 
         markup = types.InlineKeyboardMarkup()
@@ -1168,7 +1180,6 @@ def handle_muscle_prediction_click(call):
     else:
         bot.send_message(chat_id, "Error: Not enough data for calculation.")
 
-#відкриття меню вибору сегментів ампутації
 @bot.callback_query_handler(func=lambda call: call.data == "start_amputation_menu")
 def handle_start_amputation_menu(call):
     try: bot.answer_callback_query(call.id)
@@ -1179,7 +1190,6 @@ def handle_start_amputation_menu(call):
     markup = generate_amputation_keyboard([])
     bot.send_message(chat_id, "Select amputated segments:", reply_markup=markup)
 
-#генерація клавіатури з частинами тіла для ампутації
 def generate_amputation_keyboard(selected_amps):
     markup = types.InlineKeyboardMarkup()
     segments = [
@@ -1201,7 +1211,6 @@ def generate_amputation_keyboard(selected_amps):
     markup.add(types.InlineKeyboardButton("🔄 Start Over", callback_data="restart"))
     return markup
 
-#обробка вибору ампутацій
 @bot.callback_query_handler(func=lambda call: call.data.startswith("toggle_amp_"))
 def handle_amputation_toggle(call):
     try: bot.answer_callback_query(call.id)
@@ -1218,7 +1227,6 @@ def handle_amputation_toggle(call):
     markup = generate_amputation_keyboard(selected)
     bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=markup)
 
-#підтвердження ампутацій розрахунок втраченої маси тіла та коригованого ІМТ
 @bot.callback_query_handler(func=lambda call: call.data == "confirm_amputations")
 def handle_confirm_amputations(call):
     try: bot.answer_callback_query(call.id)
@@ -1233,12 +1241,10 @@ def handle_confirm_amputations(call):
         bot.send_message(chat_id, "You did not select any amputation.")
         return
 
-    #сумування відсотків втрати маси тіла
     total_lost_pct = sum(AMPUTATION_PERCENTAGES[gender].get(amp.split('_')[1], 0.0) for amp in selected_amps if len(amp.split('_')) >= 2)
     current_weight = data.get('Body_Weight_Re_Examination', data.get('Body_Weight', 80))
     height = data.get('Height', 1.75)
 
-    #відновлена вага для розрахунку ідеального ІМТ
     corrected_weight = (current_weight / (100 - total_lost_pct)) * 100 if total_lost_pct < 100 else current_weight
     corrected_bmi = corrected_weight / (height ** 2)
     lost_mass_kg = corrected_weight - current_weight
@@ -1256,8 +1262,10 @@ def handle_confirm_amputations(call):
     msg = bot.send_message(chat_id, msg_text, parse_mode="Markdown")
     bot.register_next_step_handler(msg, process_amp_days_and_predict)
 
-#запит днів після ампутації та формування остаточного прогнозу ML для ампутантів
 def process_amp_days_and_predict(message):
+    if message.text == '/exit':
+        exit_message(message)
+        return
     chat_id = message.chat.id
     try:
         patient_symptoms[chat_id]['Days_after_amputation'] = float(message.text)
@@ -1294,7 +1302,6 @@ def process_amp_days_and_predict(message):
 
         result_text = f"✅ *Final Predicted ΔUAMC after amputation:* `{round(pred, 1)} cm`\n\n"
 
-        #попередження про неточність якщо була ампутація тієї кінцівки де мірявся UAMC
         is_right_arm_amp = any(seg in selected_amps for seg in ['amp_shoulder_r', 'amp_forearm_r', 'amp_hand_r'])
         if is_right_arm_amp:
             result_text += "⚠️ *Attention:* UAMC clinical anthropometry is invalid due to right arm amputation.\n\n"
@@ -1309,7 +1316,6 @@ def process_amp_days_and_predict(message):
         msg = bot.send_message(chat_id, "Enter a valid number:")
         bot.register_next_step_handler(msg, process_amp_days_and_predict)
 
-#скидання даних і повернення до початку діалогу
 @bot.callback_query_handler(func=lambda call: call.data == "restart")
 def handle_restart_click(call):
     chat_id = call.message.chat.id
@@ -1319,21 +1325,16 @@ def handle_restart_click(call):
     except ApiTelegramException: pass
     start_message(call.message)
 
-#обробник для кнопки виходу
 @bot.callback_query_handler(func=lambda call: call.data == "exit")
 def handle_exit(call):
     chat_id = call.message.chat.id
-    
     if chat_id in patient_symptoms:
         del patient_symptoms[chat_id]
-        
     try: 
         bot.delete_message(chat_id, call.message.message_id)
     except ApiTelegramException: 
         pass
-        
     bot.send_message(chat_id, "Діалог скасовано Натисніть /start для нового розрахунку")
 
 if __name__ == '__main__':
-
     bot.polling(none_stop=True)
