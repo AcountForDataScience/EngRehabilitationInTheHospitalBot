@@ -537,7 +537,7 @@ def get_evidence_base_text():
         "⚠️ *Notice: This tool provides statistical ML estimations to support recovery tracking and does NOT replace professional clinical judgment.*"
     )
 
-bot = telebot.TeleBot('8520830685:AAGvGEkMvKkecglIwAcfgVORvGYlq7Vd81w')
+bot = telebot.TeleBot('8464210577:AAHrEPRdNsgluESEIb1A9VdrYQnm_SFQXFo')
 patient_symptoms = {}
 
 @bot.message_handler(commands=['start'])
