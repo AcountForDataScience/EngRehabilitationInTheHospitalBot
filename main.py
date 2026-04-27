@@ -557,8 +557,7 @@ def generate_muscle_forecast_text(delta_uamc_cm, baseline_uamc_mm, days=30):
         f"Reference for growth with adequate nutritional support: +0.3…+1.0 cm / month\n"
     )
 
-# Використовуємо змінні середовища для токена (БЕЗПЕКА!)
-bot = telebot.TeleBot(os.getenv('TELEGRAM_BOT_TOKEN') or 'ТУТ_МАЄ_БУТИ_ТВІЙ_НОВИЙ_ТОКЕН')
+bot = telebot.TeleBot('8464210577:AAHrEPRdNsgluESEIb1A9VdrYQnm_SFQXFo')
 
 patient_symptoms = {}
 
