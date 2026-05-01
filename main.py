@@ -131,7 +131,7 @@ def evaluate_anthropometry(gender, age, mac_cm, tsf_cm):
         mac_cm = float(mac_cm)
         tsf_mm = float(tsf_cm) * 10.0
         mac_mm = mac_cm * 10.0
-        
+
         #розрахунок UAMC
         uamc_mm = mac_mm - (math.pi * tsf_mm)
 
@@ -567,7 +567,7 @@ def get_evidence_base_text():
 def generate_muscle_forecast_text(delta_uamc_cm, baseline_uamc_cm, days=30):
     forecast_cm = round(baseline_uamc_cm + delta_uamc_cm, 1)
     sign = "+" if delta_uamc_cm > 0 else ""
-    
+
     if delta_uamc_cm > 0.1:
         dynamics = "muscle mass gain"
         interp = "positive response to rehabilitation"
@@ -600,10 +600,11 @@ def exit_message(message):
     bot.clear_step_handler_by_chat_id(chat_id)
     markup = types.ReplyKeyboardRemove()
     bot.send_message(
-        chat_id, 
-        "Роботу SmartRecover AI завершено. Усі тимчасові дані очищено. 🛑\nЩоб почати нову сесію, введіть /start.", 
+        chat_id,
+        "Роботу SmartRecover AI завершено. Усі тимчасові дані очищено. 🛑\nЩоб почати нову сесію, введіть /start.",
         reply_markup=markup
     )
+
 @bot.message_handler(commands=['start'])
 def start_message(message):
     bot.clear_step_handler_by_chat_id(message.chat.id)
@@ -666,23 +667,53 @@ def get_start_date(message):
     chat_id = message.chat.id
     patient_symptoms[chat_id]['exam_date'] = message.text.strip()
     stage = patient_symptoms[chat_id]['Stage']
-    
-    #логіказалежно від того на якому етапі перебуває пацієнт
+
     if stage == "At the beginning":
-        start_snaq_question_1(chat_id)
-    elif stage == "In progress":
-        msg = bot.send_message(chat_id, "Enter CURRENT date (DD.MM.YYYY):")
-        bot.register_next_step_handler(msg, get_end_date)
-    else:
+        # Якщо на початку - питаємо тільки плановий кінець
         msg = bot.send_message(chat_id, "Enter PLANNED END date (DD.MM.YYYY):")
         bot.register_next_step_handler(msg, get_end_date)
+    elif stage == "In progress":
+        # Якщо в процесі - питаємо поточну дату (як проміжну)
+        msg = bot.send_message(chat_id, "Enter CURRENT examination date (DD.MM.YYYY):")
+        bot.register_next_step_handler(msg, get_current_date)
+    else:
+        # Якщо завершено - питаємо дату завершення
+        msg = bot.send_message(chat_id, "Enter ACTUAL END date (DD.MM.YYYY):")
+        bot.register_next_step_handler(msg, get_end_date)
+
+# НОВА ФУНКЦІЯ: для збору поточної дати (проміжного огляду)
+def get_current_date(message):
+    if message.text == '/exit':
+        exit_message(message)
+        return
+    chat_id = message.chat.id
+    # Зберігаємо поточну дату як 'reexam_date', бо саме з нею ми порівнюємо дані
+    patient_symptoms[chat_id]['reexam_date'] = message.text.strip()
+
+    # Питаємо третю дату - плановий кінець
+    msg = bot.send_message(chat_id, "Enter PLANNED END date of rehabilitation (DD.MM.YYYY):")
+    bot.register_next_step_handler(msg, get_planned_end_date)
+
+# НОВА ФУНКЦІЯ: зберігаємо плановий кінець і переходимо до SNAQ
+def get_planned_end_date(message):
+    if message.text == '/exit':
+        exit_message(message)
+        return
+    chat_id = message.chat.id
+    # Зберігаємо планову дату для ML-моделей
+    patient_symptoms[chat_id]['planned_end_date'] = message.text.strip()
+    start_snaq_question_1(chat_id)
 
 def get_end_date(message):
     if message.text == '/exit':
         exit_message(message)
         return
-    patient_symptoms[message.chat.id]['reexam_date'] = message.text.strip()
-    start_snaq_question_1(message.chat.id)
+    chat_id = message.chat.id
+    patient_symptoms[chat_id]['reexam_date'] = message.text.strip()
+
+    # Якщо стадія "Початок" або "Завершено", планова дата співпадає з reexam_date
+    patient_symptoms[chat_id]['planned_end_date'] = message.text.strip()
+    start_snaq_question_1(chat_id)
 
 #опитувальник SNAQ
 def start_snaq_question_1(chat_id):
@@ -735,13 +766,13 @@ def handle_snaq_4(call):
     chat_id = call.message.chat.id
     patient_symptoms[chat_id]['snaq_score'] += int(call.data.split('_')[1])
     total_score = patient_symptoms[chat_id]['snaq_score']
-    
-    #висновок за опитувальником оцінка ризику втрати ваги
+
+    # висновок за опитувальником оцінка ризику втрати ваги
     if total_score <= 14:
         conclusion = "significant risk of weight loss ≥5% within 6 months."
     else:
         conclusion = "low malnutrition risk."
-        
+
     msg_text = (
         f"📋 *SNAQ (Simplified Nutritional Appetite Questionnaire), Wilson 2005*\n"
         f"Total score: `{total_score} out of 20`\n"
@@ -749,24 +780,32 @@ def handle_snaq_4(call):
         f"Conclusion: {conclusion}"
     )
     bot.send_message(chat_id, msg_text, parse_mode="Markdown")
-    
+
     patient_symptoms[chat_id]['active_symptoms'] = []
-    send_symptoms_keyboard(chat_id)
+
+    stage = patient_symptoms[chat_id].get('Stage', 'At the beginning')
+
+    if stage == "At the beginning":
+        #Якщо пацієнт щойно надійшов, пропускаємо симптоми
+        msg = bot.send_message(chat_id, "Enter whole grain products amount (g/day):")
+        bot.register_next_step_handler(msg, get_grains)
+    else:
+        send_symptoms_keyboard(chat_id)
 
 #інлайн-клавіатура для симптомів
 def send_symptoms_keyboard(chat_id, message_id=None):
     selected = patient_symptoms[chat_id].get('active_symptoms', [])
     markup = types.InlineKeyboardMarkup()
-    
+
     symp_list = [("Constipation", "Constipation"), ("Bloating", "Bloating"), ("Insomnia", "Insomnia"), ("Heartburn", "Heartburn")]
-    
+
     for name, code in symp_list:
         btn_text = f"✅ {name}" if code in selected else name
         markup.add(types.InlineKeyboardButton(btn_text, callback_data=f"symp_{code}"))
-        
+
     markup.add(types.InlineKeyboardButton("➡️ Continue", callback_data="symp_continue"))
     text = "Select CURRENT symptoms to track (if any):"
-    
+
     if message_id: bot.edit_message_text(text, chat_id, message_id, reply_markup=markup)
     else: bot.send_message(chat_id, text, reply_markup=markup)
 
@@ -813,7 +852,7 @@ def get_height(message):
         return
     chat_id = message.chat.id
     text = message.text.strip().replace(',', '.')
-    
+
     #спеціальна обробка для пацієнтів з ампутацією ніг
     if text == '0':
         msg = bot.send_message(
@@ -828,7 +867,7 @@ def get_height(message):
     try:
         val = float(text)
         #автоматична конвертація см в метри
-        if val > 3.0: val = val / 100.0 
+        if val > 3.0: val = val / 100.0
         patient_symptoms[chat_id]['Height'] = val
         msg = bot.send_message(chat_id, "Thank you! Enter INITIAL weight (kg):")
         bot.register_next_step_handler(msg, get_weight_start)
@@ -869,11 +908,16 @@ def get_weight_start(message):
         val = float(message.text.replace(',', '.'))
         if val <= 0: raise ValueError
         patient_symptoms[chat_id]['Body_Weight'] = val
-        if patient_symptoms[chat_id]['Stage'] == "At the beginning":
+
+        stage = patient_symptoms[chat_id]['Stage']
+        if stage == "At the beginning":
             msg = bot.send_message(chat_id, "Enter INITIAL waist circumference (cm):")
             bot.register_next_step_handler(msg, get_waist_start)
-        else:
-            msg = bot.send_message(chat_id, "Enter CURRENT/FINAL weight (kg):")
+        elif stage == "In progress":
+            msg = bot.send_message(chat_id, "Enter CURRENT weight (kg):")
+            bot.register_next_step_handler(msg, get_weight_final)
+        else: # Completed
+            msg = bot.send_message(chat_id, "Enter FINAL weight (kg):")
             bot.register_next_step_handler(msg, get_weight_final)
     except ValueError:
         bot.send_message(chat_id, "Please enter a positive number.")
@@ -902,11 +946,16 @@ def get_waist_start(message):
     try:
         val = float(message.text.replace(',', '.'))
         patient_symptoms[chat_id]['Waist_Start'] = val
-        if patient_symptoms[chat_id]['Stage'] == "At the beginning":
+
+        stage = patient_symptoms[chat_id]['Stage']
+        if stage == "At the beginning":
             msg = bot.send_message(chat_id, "Enter INITIAL Triceps skinfold thickness (cm):")
             bot.register_next_step_handler(msg, get_triceps_start)
-        else:
-            msg = bot.send_message(chat_id, "Enter CURRENT/FINAL waist circumference (cm):")
+        elif stage == "In progress":
+            msg = bot.send_message(chat_id, "Enter CURRENT waist circumference (cm):")
+            bot.register_next_step_handler(msg, get_waist_final)
+        else: # Completed
+            msg = bot.send_message(chat_id, "Enter FINAL waist circumference (cm):")
             bot.register_next_step_handler(msg, get_waist_final)
     except ValueError:
         bot.send_message(chat_id, "Please enter a valid number.")
@@ -932,7 +981,7 @@ def get_triceps_start(message):
     chat_id = message.chat.id
     try:
         val = float(message.text.replace(',', '.'))
-        patient_symptoms[chat_id]['Triceps_Start'] = val 
+        patient_symptoms[chat_id]['Triceps_Start'] = val
         if patient_symptoms[chat_id]['Stage'] == "At the beginning":
             msg = bot.send_message(chat_id, "Enter INITIAL Paraumbilical skinfold thickness (cm):")
             bot.register_next_step_handler(msg, get_skinfat_start)
@@ -949,7 +998,7 @@ def get_triceps_final(message):
         return
     try:
         val = float(message.text.replace(',', '.'))
-        patient_symptoms[message.chat.id]['Triceps_Final'] = val 
+        patient_symptoms[message.chat.id]['Triceps_Final'] = val
         msg = bot.send_message(message.chat.id, "Enter INITIAL Paraumbilical skinfold thickness (cm):")
         bot.register_next_step_handler(msg, get_skinfat_start)
     except ValueError:
@@ -963,7 +1012,7 @@ def get_skinfat_start(message):
     chat_id = message.chat.id
     try:
         val = float(message.text.replace(',', '.'))
-        patient_symptoms[chat_id]['SkinFat_Start'] = val 
+        patient_symptoms[chat_id]['SkinFat_Start'] = val
         if patient_symptoms[chat_id]['Stage'] == "At the beginning":
             msg = bot.send_message(chat_id, "Enter INITIAL circumference of the right upper arm (cm):")
             bot.register_next_step_handler(msg, get_shoulder_start)
@@ -980,7 +1029,7 @@ def get_skinfat_final(message):
         return
     try:
         val = float(message.text.replace(',', '.'))
-        patient_symptoms[message.chat.id]['SkinFat_Final'] = val 
+        patient_symptoms[message.chat.id]['SkinFat_Final'] = val
         msg = bot.send_message(message.chat.id, "Enter INITIAL circumference of the right upper arm (cm):")
         bot.register_next_step_handler(msg, get_shoulder_start)
     except ValueError:
@@ -995,7 +1044,7 @@ def get_shoulder_start(message):
     try:
         val = float(message.text.replace(',', '.'))
         patient_symptoms[chat_id]['Shoulder_R_Start'] = val
-        
+
         #завершальний етап вводу даних для стадії на початку
         if patient_symptoms[chat_id]['Stage'] == "At the beginning":
             perform_initial_assessment(chat_id)
@@ -1013,7 +1062,7 @@ def get_shoulder_final(message):
     try:
         val = float(message.text.replace(',', '.'))
         patient_symptoms[message.chat.id]['Shoulder_R_Final'] = val
-        
+
         #завершальний етап вводу даних для інших стадій
         perform_prediction(message.chat.id)
     except ValueError:
@@ -1056,9 +1105,9 @@ def perform_initial_assessment(chat_id):
             )
             anthro_msg += get_evidence_base_text()
             bot.send_message(chat_id, anthro_msg, parse_mode="Markdown")
-        
+
         send_uamc_explanation(chat_id)
-        
+
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("🔄 Start Over", callback_data="restart"))
         bot.send_message(chat_id, "Dynamics prediction is unavailable at the initial stage.", reply_markup=markup)
@@ -1107,7 +1156,8 @@ def perform_prediction(chat_id):
                         Age=data.get('Age', 0),
                         Body_Weight=data.get('Body_Weight', 0),
                         date_of_examination=data.get('exam_date', ''),
-                        date_of_re_examination=data.get('reexam_date', '')
+                        # ВАЖЛИВО: Передаємо ПЛАНОВУ дату завершення, а не поточну
+                        date_of_re_examination=data.get('planned_end_date', '')
                     )
 
                     if symp_time:
@@ -1204,7 +1254,7 @@ def handle_muscle_prediction_click(call):
     delta_skinfat = data['SkinFat_Final'] - data['SkinFat_Start']
 
     primary_mass = Predict_Muscle_Mass_Primary(data['Whole_grain_products'], data['Age'])
-    
+
     anthro_eval_start = evaluate_anthropometry(
         gender=data.get('Gender', 'male'),
         age=data.get('Age', 30),
@@ -1223,7 +1273,7 @@ def handle_muscle_prediction_click(call):
 
     if primary_mass is not None:
         result_text = generate_muscle_forecast_text(primary_mass, baseline_uamc_cm, days)
-        
+
         #меню запиту щодо ампутації
         result_text += f"\nDo you want to account for amputation?"
 
@@ -1243,7 +1293,7 @@ def handle_start_amputation_menu(call):
 
     chat_id = call.message.chat.id
     patient_symptoms[chat_id]['selected_amps'] = []
-    
+
     # клавіатура
     markup = generate_amputation_keyboard([])
     bot.send_message(chat_id, "Select amputated segments:", reply_markup=markup)
@@ -1306,7 +1356,7 @@ def handle_confirm_amputations(call):
     current_weight = data.get('Body_Weight_Re_Examination', data.get('Body_Weight', 80))
     height = data.get('Height', 1.75)
 
-    #відновлена вага для розрахунку 
+    #відновлена вага для розрахунку
     corrected_weight = (current_weight / (100 - total_lost_pct)) * 100 if total_lost_pct < 100 else current_weight
     corrected_bmi = corrected_weight / (height ** 2)
     lost_mass_kg = corrected_weight - current_weight
@@ -1389,20 +1439,6 @@ def handle_restart_click(call):
     try: bot.answer_callback_query(call.id)
     except ApiTelegramException: pass
     start_message(call.message)
-
-@bot.callback_query_handler(func=lambda call: call.data == "exit")
-def handle_exit(call):
-    chat_id = call.message.chat.id
-    
-    if chat_id in patient_symptoms:
-        del patient_symptoms[chat_id]
-        
-    try: 
-        bot.delete_message(chat_id, call.message.message_id)
-    except ApiTelegramException: 
-        pass
-        
-    bot.send_message(chat_id, "Діалог скасовано Натисніть /start для нового розрахунку")
 
 if __name__ == '__main__':
     bot.polling(none_stop=True)
